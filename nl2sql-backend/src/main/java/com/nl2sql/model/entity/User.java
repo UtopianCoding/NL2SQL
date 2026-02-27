@@ -22,6 +22,8 @@ public class User {
 
     private String nickname;
 
+    private String avatar;
+
     private Integer status;
 
     @TableField(fill = FieldFill.INSERT)

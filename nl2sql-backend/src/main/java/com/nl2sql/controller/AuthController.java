@@ -45,6 +45,7 @@ public class AuthController {
                 .nickname(user.getNickname())
                 .email(user.getEmail())
                 .phone(user.getPhone())
+                .avatar(user.getAvatar())
                 .build();
 
         return Result.success(userInfo);

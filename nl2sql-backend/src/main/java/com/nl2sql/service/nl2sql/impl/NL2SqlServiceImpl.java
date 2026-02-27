@@ -77,7 +77,10 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             String prompt = buildPrompt(request.getQuestion(), schemaContext, conversation);
 
             LLMProvider provider = getLLMProvider();
-            String sql = provider.generateSql(prompt);
+            String llmResponse = provider.generateSql(prompt);
+            String[] parsed = parseLlmResponse(llmResponse);
+            String sql = parsed[0];
+            String explanation = parsed[1];
 
             validateSql(sql);
 
@@ -94,8 +97,8 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             // 保存用户消息到chat_message
             saveChatMessage(conversation.getId(), userId, "user", request.getQuestion(),
                     null, null, null, null, null, null);
-            // 保存助手回复到chat_message
-            saveChatMessage(conversation.getId(), userId, "assistant", "查询完成",
+            // 保存助手回复到chat_message（content存放explanation）
+            saveChatMessage(conversation.getId(), userId, "assistant", explanation,
                     sql, data, data.size(), (int) executionTime, null, history.getId());
 
             return QueryResponse.builder()
@@ -103,6 +106,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
                     .conversationId(conversation.getId())
                     .question(request.getQuestion())
                     .sql(sql)
+                    .explanation(explanation)
                     .data(data)
                     .totalRows(data.size())
                     .executionTimeMs(executionTime)
@@ -301,5 +305,28 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         msg.setErrorMessage(errorMessage);
         msg.setHistoryId(historyId);
         chatMessageMapper.insert(msg);
+    }
+
+    private String[] parseLlmResponse(String response) {
+        String sql;
+        String explanation = null;
+        if (response.contains("---SQL---") && response.contains("---EXPLANATION---")) {
+            int sqlStart = response.indexOf("---SQL---") + "---SQL---".length();
+            int explStart = response.indexOf("---EXPLANATION---");
+            sql = response.substring(sqlStart, explStart).trim();
+            explanation = response.substring(explStart + "---EXPLANATION---".length()).trim();
+        } else {
+            sql = response.trim();
+        }
+        // 清理SQL中可能残留的markdown标记
+        if (sql.startsWith("```sql")) {
+            sql = sql.substring(6);
+        } else if (sql.startsWith("```")) {
+            sql = sql.substring(3);
+        }
+        if (sql.endsWith("```")) {
+            sql = sql.substring(0, sql.length() - 3);
+        }
+        return new String[]{sql.trim(), explanation};
     }
 }
