@@ -1,9 +1,12 @@
 package com.nl2sql.service.nl2sql.impl;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nl2sql.mapper.ChatMessageMapper;
 import com.nl2sql.mapper.ConversationMapper;
 import com.nl2sql.mapper.QueryHistoryMapper;
 import com.nl2sql.model.dto.QueryRequest;
 import com.nl2sql.model.dto.QueryResponse;
+import com.nl2sql.model.entity.ChatMessage;
 import com.nl2sql.model.entity.Conversation;
 import com.nl2sql.model.entity.DataSource;
 import com.nl2sql.model.entity.QueryHistory;
@@ -40,6 +43,12 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
     @Autowired
     private ConversationMapper conversationMapper;
+
+    @Autowired
+    private ChatMessageMapper chatMessageMapper;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Autowired
     private DeepSeekProvider deepSeekProvider;
@@ -82,6 +91,13 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
             updateConversation(conversation, request.getQuestion(), sql);
 
+            // 保存用户消息到chat_message
+            saveChatMessage(conversation.getId(), userId, "user", request.getQuestion(),
+                    null, null, null, null, null, null);
+            // 保存助手回复到chat_message
+            saveChatMessage(conversation.getId(), userId, "assistant", "查询完成",
+                    sql, data, data.size(), (int) executionTime, null, history.getId());
+
             return QueryResponse.builder()
                     .historyId(history.getId())
                     .conversationId(conversation.getId())
@@ -100,6 +116,15 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
             saveHistory(userId, request, null, "FAILED", 0,
                     (int) executionTime, e.getMessage(), llmProvider);
+
+            // 保存失败时的对话记录
+            Long convId = request.getConversationId();
+            if (convId != null) {
+                saveChatMessage(convId, userId, "user", request.getQuestion(),
+                        null, null, null, null, null, null);
+                saveChatMessage(convId, userId, "assistant", "查询失败",
+                        null, null, null, (int) executionTime, e.getMessage(), null);
+            }
 
             return QueryResponse.builder()
                     .question(request.getQuestion())
@@ -253,5 +278,28 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
         queryHistoryMapper.insert(history);
         return history;
+    }
+
+    private void saveChatMessage(Long conversationId, Long userId, String role, String content,
+            String sql, List<Map<String, Object>> data, Integer resultRows,
+            Integer executionTimeMs, String errorMessage, Long historyId) {
+        ChatMessage msg = new ChatMessage();
+        msg.setConversationId(conversationId);
+        msg.setUserId(userId);
+        msg.setRole(role);
+        msg.setContent(content);
+        msg.setSqlText(sql);
+        if (data != null && !data.isEmpty()) {
+            try {
+                msg.setResultData(objectMapper.writeValueAsString(data));
+            } catch (Exception e) {
+                log.warn("序列化查询结果失败", e);
+            }
+        }
+        msg.setResultRows(resultRows);
+        msg.setExecutionTimeMs(executionTimeMs);
+        msg.setErrorMessage(errorMessage);
+        msg.setHistoryId(historyId);
+        chatMessageMapper.insert(msg);
     }
 }

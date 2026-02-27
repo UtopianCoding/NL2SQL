@@ -6,7 +6,9 @@ import com.nl2sql.common.Result;
 import com.nl2sql.model.dto.QueryRequest;
 import com.nl2sql.model.dto.QueryResponse;
 import com.nl2sql.model.entity.Conversation;
+import com.nl2sql.model.entity.ChatMessage;
 import com.nl2sql.model.entity.QueryHistory;
+import com.nl2sql.mapper.ChatMessageMapper;
 import com.nl2sql.mapper.ConversationMapper;
 import com.nl2sql.mapper.QueryHistoryMapper;
 import com.nl2sql.service.nl2sql.NL2SqlService;
@@ -32,6 +34,9 @@ public class ChatController {
 
     @Autowired
     private QueryHistoryMapper queryHistoryMapper;
+
+    @Autowired
+    private ChatMessageMapper chatMessageMapper;
 
     @PostMapping("/nl2sql/query")
     @Operation(summary = "执行自然语言查询")
@@ -76,11 +81,15 @@ public class ChatController {
         if (conversation == null) {
             throw new RuntimeException("会话不存在");
         }
+        List<ChatMessage> chatMessages = chatMessageMapper.selectList(
+                new LambdaQueryWrapper<ChatMessage>()
+                        .eq(ChatMessage::getConversationId, id)
+                        .orderByAsc(ChatMessage::getCreateTime));
         List<QueryHistory> histories = queryHistoryMapper.selectList(
                 new LambdaQueryWrapper<QueryHistory>()
                         .eq(QueryHistory::getConversationId, id)
                         .orderByAsc(QueryHistory::getCreateTime));
-        return Result.success(new ConversationDetail(conversation, histories));
+        return Result.success(new ConversationDetail(conversation, histories, chatMessages));
     }
 
     @DeleteMapping("/conversation/{id}")
@@ -129,5 +138,5 @@ public class ChatController {
         return Result.success(favorites);
     }
 
-    public record ConversationDetail(Conversation conversation, List<QueryHistory> histories) {}
+    public record ConversationDetail(Conversation conversation, List<QueryHistory> histories, List<ChatMessage> messages) {}
 }

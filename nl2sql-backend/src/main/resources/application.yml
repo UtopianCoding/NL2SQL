@@ -108,19 +108,19 @@ nl2sql:
       max-tokens: 4000
       temperature: 0.1
       timeout: 30000
-  
+
   # Cache Configuration
   cache:
     enabled: true
     expire-minutes: 30
     max-size: 1000
-  
+
   # Query Configuration
   query:
     max-result-rows: 1000
     timeout-seconds: 30
     enable-explain: true
-  
+
   # Vector Search Configuration
   vector:
     topk: 5

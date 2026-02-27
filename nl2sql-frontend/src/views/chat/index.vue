@@ -238,28 +238,42 @@ const selectConversation = async (conversation) => {
   
   try {
     const res = await chatApi.getConversation(conversation.id)
-    messages.value = res.histories.flatMap(h => {
-      const msgs = [
-        { id: h.id * 2, role: 'user', content: h.naturalQuery }
-      ]
-      if (h.executionStatus === 'SUCCESS') {
-        msgs.push({
-          id: h.id * 2 + 1,
-          role: 'assistant',
-          content: '查询完成',
-          sql: h.generatedSql,
-          executionTime: h.executionTimeMs
-        })
-      } else {
-        msgs.push({
-          id: h.id * 2 + 1,
-          role: 'assistant',
-          content: '查询失败',
-          error: '执行出错'
-        })
-      }
-      return msgs
-    })
+    // 优先使用 chat_message 记录渲染对话
+    if (res.messages && res.messages.length > 0) {
+      messages.value = res.messages.map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        sql: m.sqlText,
+        data: m.resultData ? JSON.parse(m.resultData) : null,
+        executionTime: m.executionTimeMs,
+        error: m.errorMessage
+      }))
+    } else {
+      // 向后兼容：从 query_history 重建对话
+      messages.value = res.histories.flatMap(h => {
+        const msgs = [
+          { id: h.id * 2, role: 'user', content: h.naturalQuery }
+        ]
+        if (h.executionStatus === 'SUCCESS') {
+          msgs.push({
+            id: h.id * 2 + 1,
+            role: 'assistant',
+            content: '查询完成',
+            sql: h.generatedSql,
+            executionTime: h.executionTimeMs
+          })
+        } else {
+          msgs.push({
+            id: h.id * 2 + 1,
+            role: 'assistant',
+            content: '查询失败',
+            error: '执行出错'
+          })
+        }
+        return msgs
+      })
+    }
   } catch (error) {
     ElMessage.error(error.message || '加载对话失败')
   }
