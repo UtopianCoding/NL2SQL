@@ -1,40 +1,50 @@
 <template>
   <el-container class="main-layout">
     <!-- 侧边栏 -->
-    <el-aside width="240px" class="sidebar">
+    <el-aside :width="isCollapsed ? '64px' : '240px'" class="sidebar" :class="{ collapsed: isCollapsed }">
       <div class="logo">
         <el-icon :size="24"><DataAnalysis /></el-icon>
-        <span>SQLBot</span>
+        <span v-show="!isCollapsed">SQLBot</span>
       </div>
       
       <el-menu
         :default-active="activeMenu"
+        :collapse="isCollapsed"
         router
         class="sidebar-menu"
       >
         <el-menu-item index="/chat">
           <el-icon><ChatDotRound /></el-icon>
-          <span>智能问数</span>
+          <template #title><span>智能问数</span></template>
         </el-menu-item>
         <el-menu-item index="/datasource">
           <el-icon><Coin /></el-icon>
-          <span>数据源</span>
+          <template #title><span>数据源</span></template>
         </el-menu-item>
         <el-menu-item index="/datamodeling">
           <el-icon><Share /></el-icon>
-          <span>数据建模</span>
+          <template #title><span>数据建模</span></template>
         </el-menu-item>
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
             <span>设置</span>
           </template>
+          <el-menu-item index="/settings/profile">个人设置</el-menu-item>
           <el-menu-item index="/settings/member">成员管理</el-menu-item>
           <el-menu-item index="/settings/permission">权限配置</el-menu-item>
           <el-menu-item index="/settings/terminology">术语配置</el-menu-item>
           <el-menu-item index="/settings/sql-examples">SQL示例库</el-menu-item>
         </el-sub-menu>
       </el-menu>
+
+      <!-- 折叠按钮 -->
+      <div class="collapse-btn" @click="toggleCollapse">
+        <el-icon :size="18">
+          <Fold v-if="!isCollapsed" />
+          <Expand v-else />
+        </el-icon>
+      </div>
     </el-aside>
     
     <!-- 主内容区 -->
@@ -49,7 +59,7 @@
         <div class="header-right">
           <el-dropdown @command="handleCommand">
             <div class="user-info">
-              <el-avatar :size="32">{{ userInitial }}</el-avatar>
+              <el-avatar :size="32" :src="userAvatar">{{ userInitial }}</el-avatar>
               <span class="username">{{ userStore.userInfo?.nickname || userStore.userInfo?.username }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
@@ -71,14 +81,17 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { ElMessageBox } from 'element-plus'
+import { Fold, Expand } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+
+const isCollapsed = ref(false)
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta.title || '')
@@ -86,6 +99,14 @@ const userInitial = computed(() => {
   const name = userStore.userInfo?.nickname || userStore.userInfo?.username || 'U'
   return name.charAt(0).toUpperCase()
 })
+
+const userAvatar = computed(() => {
+  return userStore.userInfo?.avatar || ''
+})
+
+const toggleCollapse = () => {
+  isCollapsed.value = !isCollapsed.value
+}
 
 const handleCommand = async (command) => {
   if (command === 'logout') {
@@ -96,6 +117,8 @@ const handleCommand = async (command) => {
     })
     await userStore.logout()
     router.push('/login')
+  } else if (command === 'profile') {
+    router.push('/settings/profile')
   }
 }
 </script>
@@ -107,6 +130,17 @@ const handleCommand = async (command) => {
   .sidebar {
     background: linear-gradient(180deg, #1e3a5f 0%, #0d1f3c 100%);
     color: #fff;
+    transition: width 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    
+    &.collapsed {
+      .logo {
+        justify-content: center;
+        span { display: none; }
+      }
+    }
     
     .logo {
       height: 60px;
@@ -117,11 +151,20 @@ const handleCommand = async (command) => {
       font-size: 20px;
       font-weight: 600;
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      white-space: nowrap;
+      overflow: hidden;
     }
     
     .sidebar-menu {
+      flex: 1;
       background: transparent;
       border: none;
+      overflow-y: auto;
+      overflow-x: hidden;
+      
+      &:not(.el-menu--collapse) {
+        width: 100%;
+      }
       
       :deep(.el-menu-item),
       :deep(.el-sub-menu__title) {
@@ -136,9 +179,48 @@ const handleCommand = async (command) => {
           color: #fff;
         }
       }
+
+      // 子菜单展开后的背景色
+      :deep(.el-sub-menu .el-menu) {
+        background-color: rgba(0, 0, 0, 0.2);
+      }
       
       :deep(.el-sub-menu .el-menu-item) {
         padding-left: 50px !important;
+        color: rgba(255, 255, 255, 0.7);
+        
+        &:hover {
+          background-color: rgba(255, 255, 255, 0.1);
+          color: #fff;
+        }
+        
+        &.is-active {
+          background-color: var(--primary-color);
+          color: #fff;
+        }
+      }
+
+      :deep(.el-menu--collapse) {
+        .el-sub-menu__title span,
+        .el-sub-menu__title .el-sub-menu__icon-arrow {
+          display: none;
+        }
+      }
+    }
+
+    .collapse-btn {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.7);
+      transition: all 0.2s;
+
+      &:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.1);
       }
     }
   }

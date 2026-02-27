@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { authApi } from '@/api/auth'
+import { authApi, userApi } from '@/api/auth'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
@@ -37,6 +37,17 @@ export const useUserStore = defineStore('user', {
       const userInfo = await authApi.getCurrentUser()
       this.userInfo = userInfo
       localStorage.setItem('userInfo', JSON.stringify(userInfo))
+    },
+
+    async updateProfile(data) {
+      const userInfo = await userApi.updateProfile(data)
+      this.userInfo = userInfo
+      localStorage.setItem('userInfo', JSON.stringify(userInfo))
+      return userInfo
+    },
+
+    async changePassword(data) {
+      await userApi.changePassword(data)
     }
   }
 })

@@ -30,6 +30,36 @@ const routes = [
         name: 'DataModeling',
         component: () => import('@/views/datamodeling/index.vue'),
         meta: { title: '数据建模', requiresAuth: true }
+      },
+      {
+        path: 'settings/profile',
+        name: 'Profile',
+        component: () => import('@/views/settings/profile/index.vue'),
+        meta: { title: '个人设置', requiresAuth: true }
+      },
+      {
+        path: 'settings/member',
+        name: 'MemberManagement',
+        component: () => import('@/views/settings/placeholder.vue'),
+        meta: { title: '成员管理', requiresAuth: true }
+      },
+      {
+        path: 'settings/permission',
+        name: 'PermissionConfig',
+        component: () => import('@/views/settings/placeholder.vue'),
+        meta: { title: '权限配置', requiresAuth: true }
+      },
+      {
+        path: 'settings/terminology',
+        name: 'TerminologyConfig',
+        component: () => import('@/views/settings/placeholder.vue'),
+        meta: { title: '术语配置', requiresAuth: true }
+      },
+      {
+        path: 'settings/sql-examples',
+        name: 'SqlExamples',
+        component: () => import('@/views/settings/placeholder.vue'),
+        meta: { title: 'SQL示例库', requiresAuth: true }
       }
     ]
   }
