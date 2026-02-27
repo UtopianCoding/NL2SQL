@@ -1,0 +1,22 @@
+你是一个数据库建模专家。请分析以下数据库表之间的关系。
+
+数据库表结构:
+{{schema}}
+
+请分析表之间可能存在的关系，输出JSON数组格式:
+[{"sourceTable":"表名1","targetTable":"表名2","relationType":"ONE_TO_MANY","confidence":0.95,"reasoning":"推断依据","sourceFields":["id"],"targetFields":["user_id"]}]
+
+分析规则:
+1. 识别字段命名规律(如 user_id 通常指向 user 表的 id 字段)
+2. 识别主键和可能的外键字段
+3. 根据字段注释理解业务含义
+4. relationType取值:
+   - ONE_TO_ONE: 两表主键一致或唯一约束外键
+   - ONE_TO_MANY: 主表主键对应从表外键(如 user.id -> order.user_id)
+   - MANY_TO_ONE: 从表外键对应主表主键
+   - MANY_TO_MANY: 通过中间表关联(标注中间表)
+5. confidence: 0到1之间的置信度，基于命名匹配度和注释匹配度
+6. 只返回confidence大于0.7的关系
+7. 必须返回合法JSON数组，不要添加markdown标记或其他说明文字
+
+请仅返回JSON数组。

@@ -1,0 +1,12 @@
+com\nl2sql\service\nl2sql\NL2SqlService.class
+com\nl2sql\service\llm\QwenProvider$ChatRequest.class
+com\nl2sql\service\DatabaseTool.class
+com\nl2sql\service\nl2sql\impl\NL2SqlServiceImpl.class
+com\nl2sql\service\llm\DeepSeekProvider.class
+com\nl2sql\service\llm\QwenProvider.class
+com\nl2sql\service\llm\DeepSeekProvider$Message.class
+com\nl2sql\service\llm\DeepSeekProvider$ChatRequest.class
+com\nl2sql\service\llm\QwenProvider$Message.class
+com\nl2sql\model\dto\TableDetailDTO.class
+com\nl2sql\model\dto\TableRelationDTO.class
+com\nl2sql\service\llm\LLMProvider.class
