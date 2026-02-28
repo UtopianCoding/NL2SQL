@@ -218,7 +218,7 @@ public class DataModelingServiceImpl implements DataModelingService {
     }
 
     @Override
-    public void deleteRelation(Long relationId) {
+    public void deleteRelation(String relationId) {
         tableNodeRepository.deleteAIRelation(relationId);
     }
 
@@ -233,9 +233,9 @@ public class DataModelingServiceImpl implements DataModelingService {
     }
 
     @Override
-    public void updateRelation(Long relationId, String relationType) {
+    public void updateRelation(String relationId, String relationType) {
         neo4jClient.query(
-                "MATCH ()-[r:AI_RELATION]->() WHERE id(r) = $relationId " +
+                "MATCH ()-[r:AI_RELATION]->() WHERE elementId(r) = $relationId " +
                 "SET r.relationType = $relationType, r.confidence = 1.0, r.reasoning = '手动设置'"
         )
         .bind(relationId).to("relationId")

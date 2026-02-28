@@ -14,11 +14,11 @@ public interface DataModelingService {
 
     SyncTask getAnalysisProgress(Long taskId);
 
-    void deleteRelation(Long relationId);
+    void deleteRelation(String relationId);
 
     void updateFieldComment(Long fieldId, String comment);
 
-    void updateRelation(Long relationId, String relationType);
+    void updateRelation(String relationId, String relationType);
 
     void createRelation(Long dsId, Long sourceTableId, Long targetTableId,
                         String relationType, String sourceFields, String targetFields);

@@ -65,13 +65,13 @@ public interface TableNodeRepository extends Neo4jRepository<TableNode, Long> {
                t2.tableId as targetTableId, t2.tableName as targetTableName,
                r.relationType as relationType, r.confidence as confidence,
                r.reasoning as reasoning, r.sourceFields as sourceFields,
-               r.targetFields as targetFields, id(r) as relationId
+               r.targetFields as targetFields, elementId(r) as relationId
         """)
     List<Map<String, Object>> findAIRelationsByDsId(Long dsId);
 
     @Query("MATCH (t:Table {dsId: $dsId})-[r:AI_RELATION]-() DELETE r")
     void deleteAllAIRelationsByDsId(Long dsId);
 
-    @Query("MATCH ()-[r:AI_RELATION]->() WHERE id(r) = $relationId DELETE r")
-    void deleteAIRelation(Long relationId);
+    @Query("MATCH ()-[r:AI_RELATION]->() WHERE elementId(r) = $relationId DELETE r")
+    void deleteAIRelation(String relationId);
 }

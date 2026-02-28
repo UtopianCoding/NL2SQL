@@ -42,7 +42,7 @@ public class DataModelingController {
 
     @DeleteMapping("/relation/{relationId}")
     @Operation(summary = "删除关系")
-    public Result<Void> deleteRelation(@PathVariable Long relationId) {
+    public Result<Void> deleteRelation(@PathVariable String relationId) {
         dataModelingService.deleteRelation(relationId);
         return Result.success();
     }
@@ -57,7 +57,7 @@ public class DataModelingController {
 
     @PutMapping("/relation/{relationId}")
     @Operation(summary = "更新关系类型")
-    public Result<Void> updateRelation(@PathVariable Long relationId, @RequestBody Map<String, String> body) {
+    public Result<Void> updateRelation(@PathVariable String relationId, @RequestBody Map<String, String> body) {
         String relationType = body.get("relationType");
         dataModelingService.updateRelation(relationId, relationType);
         return Result.success();
