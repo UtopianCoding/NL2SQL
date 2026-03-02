@@ -9,9 +9,12 @@ import com.nl2sql.repository.neo4j.TableNodeRepository;
 import com.nl2sql.service.graph.Neo4jService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -22,6 +25,9 @@ public class Neo4jServiceImpl implements Neo4jService {
 
     @Autowired
     private FieldNodeRepository fieldNodeRepository;
+
+    @Autowired
+    private Neo4jClient neo4jClient;
 
     @Override
     public void syncTableToGraph(TableMeta tableMeta, List<FieldMeta> fields) {
@@ -105,6 +111,35 @@ public class Neo4jServiceImpl implements Neo4jService {
                 }
                 if (field.getFieldComment() != null) {
                     sb.append(" -- ").append(field.getFieldComment());
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+
+        // 添加表关系信息
+        Collection<Map<String, Object>> relations = neo4jClient
+                .query("MATCH (t1:Table {dsId: $dsId})-[r:AI_RELATION]->(t2:Table) " +
+                       "RETURN t1.tableName as sourceTableName, t2.tableName as targetTableName, " +
+                       "r.relationType as relationType, r.sourceFields as sourceFields, " +
+                       "r.targetFields as targetFields")
+                .bind(dsId).to("dsId")
+                .fetch().all();
+        if (!relations.isEmpty()) {
+            sb.append("## 表之间的关系\n");
+            for (Map<String, Object> rel : relations) {
+                String sourceTable = (String) rel.get("sourceTableName");
+                String targetTable = (String) rel.get("targetTableName");
+                String relationType = (String) rel.get("relationType");
+                String sourceFields = (String) rel.get("sourceFields");
+                String targetFields = (String) rel.get("targetFields");
+
+                sb.append("- ").append(sourceTable).append(" -> ").append(targetTable)
+                  .append(" [").append(relationType).append("]");
+                if (sourceFields != null && !sourceFields.isEmpty()
+                        && targetFields != null && !targetFields.isEmpty()) {
+                    sb.append(" (").append(sourceTable).append(".").append(sourceFields)
+                      .append(" = ").append(targetTable).append(".").append(targetFields).append(")");
                 }
                 sb.append("\n");
             }

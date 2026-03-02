@@ -74,7 +74,9 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         try {
             Conversation conversation = getOrCreateConversation(request, userId);
             String schemaContext = neo4jService.buildSchemaContext(request.getDsId());
-            String prompt = buildPrompt(request.getQuestion(), schemaContext, conversation);
+            DataSource ds = dataSourceService.getById(request.getDsId());
+            String dbType = resolveDbTypeLabel(ds.getType());
+            String prompt = buildPrompt(request.getQuestion(), schemaContext, conversation, dbType);
 
             LLMProvider provider = getLLMProvider();
             String llmResponse = provider.generateSql(prompt);
@@ -84,7 +86,6 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
             validateSql(sql);
 
-            DataSource ds = dataSourceService.getById(request.getDsId());
             List<Map<String, Object>> data = executeSql(ds, sql);
 
             long executionTime = System.currentTimeMillis() - startTime;
@@ -172,7 +173,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         conversationMapper.updateById(conversation);
     }
 
-    private String buildPrompt(String question, String schemaContext, Conversation conversation) {
+    private String buildPrompt(String question, String schemaContext, Conversation conversation, String dbType) {
         if (promptTemplate == null) {
             try {
                 ClassPathResource resource = new ClassPathResource("prompts/text2sql.txt");
@@ -184,10 +185,22 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         }
 
         return promptTemplate
+                .replace("{{db_type}}", dbType)
                 .replace("{{schema_context}}", schemaContext)
                 .replace("{{user_question}}", question)
                 .replace("{{similar_queries}}", "")
                 .replace("{{conversation_history}}", "");
+    }
+
+    private String resolveDbTypeLabel(String type) {
+        if (type == null) return "MySQL";
+        return switch (type.toLowerCase()) {
+            case "mysql" -> "MySQL";
+            case "postgresql", "pg" -> "PostgreSQL";
+            case "oracle" -> "Oracle";
+            case "sqlserver", "mssql" -> "SQL Server (MSSQL)";
+            default -> type;
+        };
     }
 
     private LLMProvider getLLMProvider() {

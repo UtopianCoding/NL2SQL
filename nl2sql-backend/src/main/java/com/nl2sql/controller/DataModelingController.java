@@ -42,7 +42,7 @@ public class DataModelingController {
 
     @DeleteMapping("/relation/{relationId}")
     @Operation(summary = "删除关系")
-    public Result<Void> deleteRelation(@PathVariable String relationId) {
+    public Result<Void> deleteRelation(@PathVariable Long relationId) {
         dataModelingService.deleteRelation(relationId);
         return Result.success();
     }
@@ -57,7 +57,7 @@ public class DataModelingController {
 
     @PutMapping("/relation/{relationId}")
     @Operation(summary = "更新关系类型")
-    public Result<Void> updateRelation(@PathVariable String relationId, @RequestBody Map<String, String> body) {
+    public Result<Void> updateRelation(@PathVariable Long relationId, @RequestBody Map<String, String> body) {
         String relationType = body.get("relationType");
         dataModelingService.updateRelation(relationId, relationType);
         return Result.success();
@@ -75,4 +75,12 @@ public class DataModelingController {
                 relationType, sourceFields, targetFields);
         return Result.success();
     }
+
+    @PostMapping("/{dsId}/publish")
+    @Operation(summary = "异步发布建模数据到Neo4j图谱")
+    public Result<Long> publishToGraph(@PathVariable Long dsId) {
+        Long taskId = dataModelingService.publishToGraphAsync(dsId);
+        return Result.success(taskId);
+    }
+
 }

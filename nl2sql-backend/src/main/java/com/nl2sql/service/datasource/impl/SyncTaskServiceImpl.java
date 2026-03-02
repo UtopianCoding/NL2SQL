@@ -120,7 +120,7 @@ public class SyncTaskServiceImpl implements SyncTaskService {
                             new LambdaQueryWrapper<FieldMeta>()
                                     .eq(FieldMeta::getTableId, tableMeta.getId())
                                     .orderByAsc(FieldMeta::getFieldIndex));
-                    neo4jService.syncTableToGraph(tableMeta, fields);
+                    // Neo4j同步已移至数据建模页面的"发布"操作
                 }
 
                 processedCount++;

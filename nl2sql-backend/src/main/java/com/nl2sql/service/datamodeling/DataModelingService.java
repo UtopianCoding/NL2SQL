@@ -14,12 +14,17 @@ public interface DataModelingService {
 
     SyncTask getAnalysisProgress(Long taskId);
 
-    void deleteRelation(String relationId);
+    void deleteRelation(Long relationId);
 
     void updateFieldComment(Long fieldId, String comment);
 
-    void updateRelation(String relationId, String relationType);
+    void updateRelation(Long relationId, String relationType);
 
     void createRelation(Long dsId, Long sourceTableId, Long targetTableId,
                         String relationType, String sourceFields, String targetFields);
+
+    /**
+     * 异步发布建模数据到Neo4j图谱，返回任务ID用于轮询进度
+     */
+    Long publishToGraphAsync(Long dsId);
 }

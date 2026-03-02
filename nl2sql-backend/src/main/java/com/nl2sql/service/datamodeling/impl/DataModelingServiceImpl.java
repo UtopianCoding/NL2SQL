@@ -6,12 +6,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nl2sql.mapper.FieldMetaMapper;
 import com.nl2sql.mapper.SyncTaskMapper;
 import com.nl2sql.mapper.TableMetaMapper;
+import com.nl2sql.mapper.TableRelationMapper;
 import com.nl2sql.model.dto.*;
 import com.nl2sql.model.entity.FieldMeta;
 import com.nl2sql.model.entity.SyncTask;
 import com.nl2sql.model.entity.TableMeta;
+import com.nl2sql.model.entity.TableRelation;
 import com.nl2sql.repository.neo4j.TableNodeRepository;
 import com.nl2sql.service.datamodeling.DataModelingService;
+import com.nl2sql.service.graph.Neo4jService;
 import com.nl2sql.service.llm.DeepSeekProvider;
 import com.nl2sql.service.llm.LLMProvider;
 import com.nl2sql.service.llm.QwenProvider;
@@ -22,6 +25,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StreamUtils;
 
 import java.io.IOException;
@@ -43,10 +47,16 @@ public class DataModelingServiceImpl implements DataModelingService {
     private SyncTaskMapper syncTaskMapper;
 
     @Autowired
+    private TableRelationMapper tableRelationMapper;
+
+    @Autowired
     private TableNodeRepository tableNodeRepository;
 
     @Autowired
     private Neo4jClient neo4jClient;
+
+    @Autowired
+    private Neo4jService neo4jService;
 
     @Autowired
     private DeepSeekProvider deepSeekProvider;
@@ -152,8 +162,14 @@ public class DataModelingServiceImpl implements DataModelingService {
 
             List<Map<String, Object>> relations = parseAnalysisResponse(response);
             
-            // 清除旧的AI关系
-            tableNodeRepository.deleteAllAIRelationsByDsId(dsId);
+            // 清除旧的关系（MySQL + 尝试清Neo4j）
+            tableRelationMapper.delete(new LambdaQueryWrapper<TableRelation>()
+                    .eq(TableRelation::getDsId, dsId));
+            try {
+                tableNodeRepository.deleteAllAIRelationsByDsId(dsId);
+            } catch (Exception e) {
+                log.warn("清除Neo4j旧关系失败（可能尚未发布）: {}", e.getMessage());
+            }
 
             // 建立表名到tableId的映射
             Map<String, Long> tableNameToId = tables.stream()
@@ -188,12 +204,23 @@ public class DataModelingServiceImpl implements DataModelingService {
                 List<String> targetFields = rel.get("targetFields") instanceof List 
                         ? (List<String>) rel.get("targetFields") : List.of();
 
-                tableNodeRepository.createAIRelation(
-                        sourceId, targetId, relationType, confidence, reasoning,
-                        String.join(",", sourceFields),
-                        String.join(",", targetFields),
-                        provider.getName()
-                );
+                // 持久化到MySQL（主要存储）
+                saveRelationToDb(dsId, sourceId, sourceTable, targetId, targetTable,
+                        relationType, String.join(",", sourceFields),
+                        String.join(",", targetFields), confidence, reasoning, provider.getName());
+
+                // 尝试同步到Neo4j（如果已发布过表节点）
+                try {
+                    tableNodeRepository.createAIRelation(
+                            sourceId, targetId, relationType, confidence, reasoning,
+                            String.join(",", sourceFields),
+                            String.join(",", targetFields),
+                            provider.getName()
+                    );
+                } catch (Exception e) {
+                    log.debug("同步关系到Neo4j失败（可能尚未发布）: {}", e.getMessage());
+                }
+
                 savedCount++;
             }
 
@@ -218,8 +245,24 @@ public class DataModelingServiceImpl implements DataModelingService {
     }
 
     @Override
-    public void deleteRelation(String relationId) {
-        tableNodeRepository.deleteAIRelation(relationId);
+    public void deleteRelation(Long relationId) {
+        TableRelation rel = tableRelationMapper.selectById(relationId);
+        if (rel == null) {
+            throw new RuntimeException("关系不存在");
+        }
+        // 从MySQL删除
+        tableRelationMapper.deleteById(relationId);
+        // 尝试从Neo4j删除（如果已发布）
+        try {
+            neo4jClient.query(
+                    "MATCH (t1:Table {tableId: $srcId})-[r:AI_RELATION]->(t2:Table {tableId: $tgtId}) DELETE r"
+            )
+            .bind(rel.getSourceTableId()).to("srcId")
+            .bind(rel.getTargetTableId()).to("tgtId")
+            .run();
+        } catch (Exception e) {
+            log.warn("从Neo4j删除关系失败（可能尚未发布）: {}", e.getMessage());
+        }
     }
 
     @Override
@@ -233,26 +276,265 @@ public class DataModelingServiceImpl implements DataModelingService {
     }
 
     @Override
-    public void updateRelation(String relationId, String relationType) {
-        neo4jClient.query(
-                "MATCH ()-[r:AI_RELATION]->() WHERE elementId(r) = $relationId " +
-                "SET r.relationType = $relationType, r.confidence = 1.0, r.reasoning = '手动设置'"
-        )
-        .bind(relationId).to("relationId")
-        .bind(relationType).to("relationType")
-        .run();
+    public void updateRelation(Long relationId, String relationType) {
+        TableRelation rel = tableRelationMapper.selectById(relationId);
+        if (rel == null) {
+            throw new RuntimeException("关系不存在");
+        }
+        // 更新MySQL
+        rel.setRelationType(relationType);
+        rel.setConfidence(1.0);
+        rel.setReasoning("手动设置");
+        tableRelationMapper.updateById(rel);
+
+        // 尝试同步更新Neo4j（如果已发布）
+        try {
+            neo4jClient.query(
+                    "MATCH (t1:Table {tableId: $srcId})-[r:AI_RELATION]->(t2:Table {tableId: $tgtId}) " +
+                    "SET r.relationType = $relationType, r.confidence = 1.0, r.reasoning = '手动设置'"
+            )
+            .bind(rel.getSourceTableId()).to("srcId")
+            .bind(rel.getTargetTableId()).to("tgtId")
+            .bind(relationType).to("relationType")
+            .run();
+        } catch (Exception e) {
+            log.warn("同步更新Neo4j关系失败（可能尚未发布）: {}", e.getMessage());
+        }
     }
 
     @Override
     public void createRelation(Long dsId, Long sourceTableId, Long targetTableId,
                                String relationType, String sourceFields, String targetFields) {
-        tableNodeRepository.createAIRelation(
-                sourceTableId, targetTableId, relationType,
-                1.0, "手动创建",
-                sourceFields != null ? sourceFields : "",
+        // 获取表名
+        TableMeta srcTable = tableMetaMapper.selectById(sourceTableId);
+        TableMeta tgtTable = tableMetaMapper.selectById(targetTableId);
+        String srcName = srcTable != null ? srcTable.getTableName() : "";
+        String tgtName = tgtTable != null ? tgtTable.getTableName() : "";
+
+        // 持久化到MySQL
+        saveRelationToDb(dsId, sourceTableId, srcName, targetTableId, tgtName,
+                relationType, sourceFields != null ? sourceFields : "",
                 targetFields != null ? targetFields : "",
-                "manual"
-        );
+                1.0, "手动创建", "manual");
+
+        // 尝试同步到Neo4j（如果已发布过，表节点存在）
+        try {
+            tableNodeRepository.createAIRelation(
+                    sourceTableId, targetTableId, relationType,
+                    1.0, "手动创建",
+                    sourceFields != null ? sourceFields : "",
+                    targetFields != null ? targetFields : "",
+                    "manual"
+            );
+        } catch (Exception e) {
+            log.warn("同步关系到Neo4j失败（可能尚未发布）: {}", e.getMessage());
+        }
+    }
+
+    @Override
+    public Long publishToGraphAsync(Long dsId) {
+        // 创建发布任务
+        SyncTask task = new SyncTask();
+        task.setDsId(dsId);
+        task.setTaskType("PUBLISH_GRAPH");
+        task.setStatus(SyncTask.STATUS_PENDING);
+        task.setTotalCount(4); // 4个阶段：清除旧数据、创建表节点、创建字段节点、恢复关系
+        task.setCurrentCount(0);
+        syncTaskMapper.insert(task);
+
+        // 在新线程中执行发布
+        new Thread(() -> {
+            try {
+                executePublish(task.getId(), dsId);
+            } catch (Exception e) {
+                log.error("发布到图谱异常: {}", e.getMessage(), e);
+                SyncTask t = syncTaskMapper.selectById(task.getId());
+                if (t != null) {
+                    t.setStatus(SyncTask.STATUS_FAILED);
+                    t.setErrorMessage(e.getMessage());
+                    syncTaskMapper.updateById(t);
+                }
+            }
+        }).start();
+
+        return task.getId();
+    }
+
+    private void executePublish(Long taskId, Long dsId) {
+        SyncTask task = syncTaskMapper.selectById(taskId);
+        task.setStatus(SyncTask.STATUS_RUNNING);
+        task.setCurrentTable("准备发布...");
+        syncTaskMapper.updateById(task);
+
+        try {
+            // 阶段1: 清除旧数据
+            task.setCurrentCount(1);
+            task.setCurrentTable("清除旧图谱数据...");
+            syncTaskMapper.updateById(task);
+            neo4jService.deleteByDsId(dsId);
+
+            // 阶段2: 获取表并批量创建Table节点
+            task.setCurrentCount(2);
+            task.setCurrentTable("同步表结构...");
+            syncTaskMapper.updateById(task);
+
+            List<TableMeta> tables = tableMetaMapper.selectList(
+                    new LambdaQueryWrapper<TableMeta>()
+                            .eq(TableMeta::getDsId, dsId)
+                            .eq(TableMeta::getSyncStatus, 1)
+                            .orderByAsc(TableMeta::getTableName));
+
+            if (tables.isEmpty()) {
+                task.setStatus(SyncTask.STATUS_FAILED);
+                task.setErrorMessage("该数据源没有已同步的表，请先在数据源管理中同步表结构");
+                syncTaskMapper.updateById(task);
+                return;
+            }
+
+            List<Map<String, Object>> tableParams = tables.stream().map(t -> {
+                Map<String, Object> m = new HashMap<>();
+                m.put("tableId", t.getId());
+                m.put("tableName", t.getTableName());
+                m.put("tableComment", t.getTableComment());
+                m.put("businessMeaning", t.getCustomComment());
+                m.put("dsId", dsId);
+                m.put("dataVolume", t.getRowCount());
+                return m;
+            }).collect(Collectors.toList());
+
+            neo4jClient.query(
+                    "UNWIND $tables AS t " +
+                    "CREATE (n:Table {tableId: t.tableId, tableName: t.tableName, " +
+                    "tableComment: t.tableComment, businessMeaning: t.businessMeaning, " +
+                    "dsId: t.dsId, dataVolume: t.dataVolume, accessFrequency: 0})"
+            ).bind(tableParams).to("tables").run();
+
+            // 阶段3: 批量创建Field节点和HAS_FIELD关系
+            task.setCurrentCount(3);
+            task.setCurrentTable("同步字段信息...");
+            syncTaskMapper.updateById(task);
+
+            List<Map<String, Object>> fieldParams = new ArrayList<>();
+            for (TableMeta table : tables) {
+                List<FieldMeta> fields = fieldMetaMapper.selectList(
+                        new LambdaQueryWrapper<FieldMeta>()
+                                .eq(FieldMeta::getTableId, table.getId())
+                                .orderByAsc(FieldMeta::getFieldIndex));
+                for (FieldMeta f : fields) {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("fieldId", f.getId());
+                    m.put("fieldName", f.getFieldName());
+                    m.put("fieldType", f.getFieldType());
+                    m.put("fieldComment", f.getFieldComment());
+                    m.put("businessMeaning", f.getCustomComment());
+                    m.put("isPrimary", f.getIsPrimary() != null && f.getIsPrimary() == 1);
+                    m.put("isForeign", false);
+                    m.put("tableId", table.getId());
+                    fieldParams.add(m);
+                }
+            }
+
+            if (!fieldParams.isEmpty()) {
+                neo4jClient.query(
+                        "UNWIND $fields AS f " +
+                        "CREATE (n:Field {fieldId: f.fieldId, fieldName: f.fieldName, " +
+                        "fieldType: f.fieldType, fieldComment: f.fieldComment, " +
+                        "businessMeaning: f.businessMeaning, isPrimary: f.isPrimary, " +
+                        "isForeign: f.isForeign, tableId: f.tableId})"
+                ).bind(fieldParams).to("fields").run();
+
+                neo4jClient.query(
+                        "UNWIND $fields AS f " +
+                        "MATCH (t:Table {tableId: f.tableId}), (fn:Field {fieldId: f.fieldId}) " +
+                        "CREATE (t)-[:HAS_FIELD]->(fn)"
+                ).bind(fieldParams).to("fields").run();
+            }
+
+            // 阶段4: 从MySQL恢复关系到Neo4j
+            task.setCurrentCount(4);
+            task.setCurrentTable("恢复表关系...");
+            syncTaskMapper.updateById(task);
+
+            List<TableRelation> relations = tableRelationMapper.selectList(
+                    new LambdaQueryWrapper<TableRelation>().eq(TableRelation::getDsId, dsId));
+            int relationCount = 0;
+            if (!relations.isEmpty()) {
+                List<Map<String, Object>> relParams = relations.stream().map(rel -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("srcId", rel.getSourceTableId());
+                    m.put("tgtId", rel.getTargetTableId());
+                    m.put("relationType", rel.getRelationType());
+                    m.put("confidence", rel.getConfidence() != null ? rel.getConfidence() : 0.8);
+                    m.put("reasoning", rel.getReasoning());
+                    m.put("sourceFields", rel.getSourceFields() != null ? rel.getSourceFields() : "");
+                    m.put("targetFields", rel.getTargetFields() != null ? rel.getTargetFields() : "");
+                    m.put("analyzedBy", rel.getCreatedBy() != null ? rel.getCreatedBy() : "manual");
+                    return m;
+                }).collect(Collectors.toList());
+
+                neo4jClient.query(
+                        "UNWIND $rels AS r " +
+                        "MATCH (t1:Table {tableId: r.srcId}), (t2:Table {tableId: r.tgtId}) " +
+                        "CREATE (t1)-[:AI_RELATION {relationType: r.relationType, confidence: r.confidence, " +
+                        "reasoning: r.reasoning, sourceFields: r.sourceFields, " +
+                        "targetFields: r.targetFields, analyzedBy: r.analyzedBy}]->(t2)"
+                ).bind(relParams).to("rels").run();
+                relationCount = relations.size();
+            }
+
+            // 完成
+            task.setCurrentTable(null);
+            task.setStatus(SyncTask.STATUS_SUCCESS);
+            syncTaskMapper.updateById(task);
+
+            log.info("发布完成，共同步 {} 张表、{} 个字段和 {} 条关系到Neo4j图谱",
+                    tables.size(), fieldParams.size(), relationCount);
+
+        } catch (Exception e) {
+            log.error("发布到图谱失败: {}", e.getMessage(), e);
+            task.setStatus(SyncTask.STATUS_FAILED);
+            task.setErrorMessage(e.getMessage());
+            syncTaskMapper.updateById(task);
+        }
+    }
+
+    /**
+     * 持久化关系到MySQL
+     */
+    private void saveRelationToDb(Long dsId, Long sourceTableId, String sourceTableName,
+                                  Long targetTableId, String targetTableName,
+                                  String relationType, String sourceFields, String targetFields,
+                                  Double confidence, String reasoning, String createdBy) {
+        // 查找是否已存在相同的关系
+        TableRelation existing = tableRelationMapper.selectOne(
+                new LambdaQueryWrapper<TableRelation>()
+                        .eq(TableRelation::getDsId, dsId)
+                        .eq(TableRelation::getSourceTableId, sourceTableId)
+                        .eq(TableRelation::getTargetTableId, targetTableId));
+
+        if (existing != null) {
+            existing.setRelationType(relationType);
+            existing.setSourceFields(sourceFields);
+            existing.setTargetFields(targetFields);
+            existing.setConfidence(confidence);
+            existing.setReasoning(reasoning);
+            existing.setCreatedBy(createdBy);
+            tableRelationMapper.updateById(existing);
+        } else {
+            TableRelation rel = new TableRelation();
+            rel.setDsId(dsId);
+            rel.setSourceTableId(sourceTableId);
+            rel.setSourceTableName(sourceTableName);
+            rel.setTargetTableId(targetTableId);
+            rel.setTargetTableName(targetTableName);
+            rel.setRelationType(relationType);
+            rel.setSourceFields(sourceFields);
+            rel.setTargetFields(targetFields);
+            rel.setConfidence(confidence);
+            rel.setReasoning(reasoning);
+            rel.setCreatedBy(createdBy);
+            tableRelationMapper.insert(rel);
+        }
     }
 
     private List<TableDetailDTO> getTablesWithFields(Long dsId) {
@@ -291,34 +573,27 @@ public class DataModelingServiceImpl implements DataModelingService {
     }
 
     private List<TableRelationDTO> getRelations(Long dsId) {
-        Collection<Map<String, Object>> rawRelations = neo4jClient
-                .query("MATCH (t1:Table {dsId: $dsId})-[r:AI_RELATION]->(t2:Table) " +
-                       "RETURN t1.tableId as sourceTableId, t1.tableName as sourceTableName, " +
-                       "t2.tableId as targetTableId, t2.tableName as targetTableName, " +
-                       "r.relationType as relationType, r.confidence as confidence, " +
-                       "r.reasoning as reasoning, r.sourceFields as sourceFields, " +
-                       "r.targetFields as targetFields, id(r) as relationId")
-                .bind(dsId).to("dsId")
-                .fetch()
-                .all();
+        // 从MySQL读取关系（持久化数据源），不依赖Neo4j中是否已发布
+        List<TableRelation> dbRelations = tableRelationMapper.selectList(
+                new LambdaQueryWrapper<TableRelation>()
+                        .eq(TableRelation::getDsId, dsId)
+                        .orderByAsc(TableRelation::getId));
 
         List<TableRelationDTO> relations = new ArrayList<>();
-
-        for (Map<String, Object> raw : rawRelations) {
+        for (TableRelation rel : dbRelations) {
             TableRelationDTO dto = new TableRelationDTO();
-            dto.setRelationId(toLong(raw.get("relationId")));
-            dto.setSourceTableId(toLong(raw.get("sourceTableId")));
-            dto.setSourceTableName((String) raw.get("sourceTableName"));
-            dto.setTargetTableId(toLong(raw.get("targetTableId")));
-            dto.setTargetTableName((String) raw.get("targetTableName"));
-            dto.setRelationType((String) raw.get("relationType"));
-            dto.setConfidence(raw.get("confidence") instanceof Number
-                    ? ((Number) raw.get("confidence")).doubleValue() : null);
-            dto.setReasoning((String) raw.get("reasoning"));
+            dto.setRelationId(rel.getId());
+            dto.setSourceTableId(rel.getSourceTableId());
+            dto.setSourceTableName(rel.getSourceTableName());
+            dto.setTargetTableId(rel.getTargetTableId());
+            dto.setTargetTableName(rel.getTargetTableName());
+            dto.setRelationType(rel.getRelationType());
+            dto.setConfidence(rel.getConfidence());
+            dto.setReasoning(rel.getReasoning());
 
-            String sf = (String) raw.get("sourceFields");
+            String sf = rel.getSourceFields();
             dto.setSourceFields(sf != null && !sf.isEmpty() ? Arrays.asList(sf.split(",")) : List.of());
-            String tf = (String) raw.get("targetFields");
+            String tf = rel.getTargetFields();
             dto.setTargetFields(tf != null && !tf.isEmpty() ? Arrays.asList(tf.split(",")) : List.of());
 
             relations.add(dto);
