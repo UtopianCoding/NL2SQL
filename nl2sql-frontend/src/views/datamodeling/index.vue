@@ -20,6 +20,15 @@
           <el-icon><Plus /></el-icon>
           新增关系
         </el-button>
+        <el-button
+          type="success"
+          :loading="publishing"
+          :disabled="!selectedDsId || erData.tables.length === 0"
+          @click="handlePublish"
+        >
+          <el-icon><Upload /></el-icon>
+          发布
+        </el-button>
       </div>
     </div>
 
@@ -47,6 +56,16 @@
             style="flex: 1; margin-left: 12px"
           />
         </div>
+        <div v-if="publishing" class="analysis-bar publish-bar">
+          <el-icon class="rotating"><Loading /></el-icon>
+          <span>{{ publishStatus }}</span>
+          <el-progress
+            :percentage="publishProgress"
+            :stroke-width="10"
+            color="#67C23A"
+            style="flex: 1; margin-left: 12px"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -54,7 +73,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { datamodelingApi } from '@/api/datamodeling'
 import DataSourcePanel from './components/DataSourcePanel.vue'
 import ERDiagramCanvas from './components/ERDiagramCanvas.vue'
@@ -64,6 +83,9 @@ const selectedDsId = ref(null)
 const diagramLoading = ref(false)
 const analyzing = ref(false)
 const analysisProgress = ref(0)
+const publishing = ref(false)
+const publishProgress = ref(0)
+const publishStatus = ref('正在发布...')
 
 const erData = reactive({
   tables: [],
@@ -72,6 +94,7 @@ const erData = reactive({
 })
 
 let pollTimer = null
+let publishPollTimer = null
 
 const handleSelectDataSource = async (dsId) => {
   selectedDsId.value = dsId
@@ -156,6 +179,62 @@ const handleRefreshDiagram = () => {
     loadERDiagram(selectedDsId.value)
   }
 }
+
+const handlePublish = async () => {
+  if (!selectedDsId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '发布将把当前建模的表结构、字段信息同步到Neo4j图谱，供智能问数使用。确定发布？',
+      '发布确认',
+      {
+        confirmButtonText: '确定发布',
+        cancelButtonText: '取消',
+        type: 'info'
+      }
+    )
+    publishing.value = true
+    publishProgress.value = 0
+    publishStatus.value = '正在发布...'
+    const taskId = await datamodelingApi.publish(selectedDsId.value)
+    pollPublishProgress(taskId)
+  } catch (e) {
+    if (e !== 'cancel') {
+      publishing.value = false
+      ElMessage.error('发布失败: ' + (e.message || '未知错误'))
+    }
+  }
+}
+
+const pollPublishProgress = (taskId) => {
+  if (publishPollTimer) clearInterval(publishPollTimer)
+  publishPollTimer = setInterval(async () => {
+    try {
+      const task = await datamodelingApi.getAnalysisProgress(taskId)
+      if (task.totalCount > 0) {
+        publishProgress.value = Math.floor((task.currentCount / task.totalCount) * 100)
+      }
+      if (task.currentTable) {
+        publishStatus.value = task.currentTable
+      }
+      if (task.status === 'SUCCESS') {
+        clearInterval(publishPollTimer)
+        publishPollTimer = null
+        publishing.value = false
+        publishProgress.value = 100
+        ElMessage.success('发布成功，建模数据已同步到图谱')
+      } else if (task.status === 'FAILED') {
+        clearInterval(publishPollTimer)
+        publishPollTimer = null
+        publishing.value = false
+        ElMessage.error('发布失败: ' + (task.errorMessage || '未知错误'))
+      }
+    } catch (e) {
+      clearInterval(publishPollTimer)
+      publishPollTimer = null
+      publishing.value = false
+    }
+  }, 1000)
+}
 </script>
 
 <style lang="less" scoped>
@@ -210,6 +289,12 @@ const handleRefreshDiagram = () => {
 
         .rotating {
           animation: rotate 1.5s linear infinite;
+        }
+
+        &.publish-bar {
+          background: #f0f9eb;
+          border-top-color: #c2e7b0;
+          color: #67C23A;
         }
       }
     }

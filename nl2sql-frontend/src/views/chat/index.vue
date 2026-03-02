@@ -118,8 +118,18 @@
             </div>
             <div class="message-body">
               <!-- 用户消息 -->
-              <div v-if="msg.role === 'user'" class="user-message-text">{{ msg.content }}</div>
-              
+              <div v-if="msg.role === 'user'" class="user-message-wrapper">
+                <div class="user-message-text">{{ msg.content }}</div>
+                <div class="user-message-actions">
+                  <el-button link size="small" class="copy-btn" @click="copyText(msg.content)">
+                    <el-icon><CopyDocument /></el-icon>
+                  </el-button>
+                  <el-button link size="small" class="copy-btn" @click="regenerate(msg.content)" :loading="loading">
+                    <el-icon><RefreshRight /></el-icon>
+                  </el-button>
+                </div>
+              </div>
+
               <!-- 助手消息：整合三个功能模块 -->
               <template v-else>
                 <!-- 1. 查询分析 -->
@@ -168,7 +178,7 @@
                       </div>
                       <div v-if="msg.content && msg.content !== '查询完成' && msg.content !== '查询失败'" class="explanation-block">
                         <div class="explanation-title">SQL解释</div>
-                        <div class="explanation-text">{{ msg.content }}</div>
+                        <div class="explanation-text markdown-body" v-html="md.render(msg.content)"></div>
                       </div>
                     </div>
                   </el-collapse-transition>
@@ -187,9 +197,9 @@
                     <div v-show="expandedSections[msg.id]?.chart !== false" class="section-content">
                       <div class="chart-wrapper">
                         <div class="chart-toolbar">
-                          <el-radio-group 
-                            :model-value="messageChartTypes[msg.id] || 'bar'" 
-                            size="small" 
+                          <el-radio-group
+                            :model-value="messageChartTypes[msg.id] || 'bar'"
+                            size="small"
                             @change="(val) => setMessageChartType(msg.id, val)"
                           >
                             <el-radio-button value="bar">柱状图</el-radio-button>
@@ -197,11 +207,11 @@
                             <el-radio-button value="pie">饼图</el-radio-button>
                           </el-radio-group>
                         </div>
-                        <v-chart 
-                          v-if="getMessageChartOption(msg)" 
-                          class="message-chart" 
-                          :option="getMessageChartOption(msg)" 
-                          autoresize 
+                        <v-chart
+                          v-if="getMessageChartOption(msg)"
+                          class="message-chart"
+                          :option="getMessageChartOption(msg)"
+                          autoresize
                         />
                         <div v-else class="chart-empty">当前数据不适合图表展示</div>
                       </div>
@@ -248,10 +258,10 @@
                   </div>
                   <div class="section-content">
                     <div class="mini-steps">
-                      <div 
-                        v-for="(step, idx) in analysisSteps" 
-                        :key="idx" 
-                        class="mini-step" 
+                      <div
+                        v-for="(step, idx) in analysisSteps"
+                        :key="idx"
+                        class="mini-step"
                         :class="step.status"
                       >
                         <el-icon v-if="step.status === 'done'"><SuccessFilled /></el-icon>
@@ -275,7 +285,7 @@
           <el-icon class="input-icon"><EditPen /></el-icon>
           <el-input
             v-model="inputText"
-            placeholder="例如：查询东部地区2023年销售额最高的5种产品"
+            placeholder="例如："
             @keydown.enter.exact="sendMessage"
             :disabled="loading"
             class="question-input"
@@ -304,7 +314,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Search, Plus, ArrowDown, CopyDocument, EditPen, Delete, MoreFilled,
   SuccessFilled, Loading, CircleCheck, DataLine, TrendCharts, DataAnalysis,
-  ChatDotRound
+  ChatDotRound, RefreshRight
 } from '@element-plus/icons-vue'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -315,6 +325,9 @@ import {
   GridComponent, DatasetComponent
 } from 'echarts/components'
 import dayjs from 'dayjs'
+import MarkdownIt from 'markdown-it'
+
+const md = new MarkdownIt()
 
 use([
   CanvasRenderer, BarChart, LineChart, PieChart,
@@ -588,7 +601,7 @@ const selectConversation = async (conversation) => {
 
   try {
     const res = await chatApi.getConversation(conversation.id)
-    
+
     // 填充消息列表
     if (res.messages && res.messages.length > 0) {
       messages.value = res.messages.map(m => ({
@@ -730,6 +743,68 @@ const scrollToBottom = () => {
 const copySql = (sql) => {
   navigator.clipboard.writeText(sql)
   ElMessage.success('SQL已复制到剪贴板')
+}
+
+const copyText = (text) => {
+  navigator.clipboard.writeText(text)
+  ElMessage.success('已复制到剪贴板')
+}
+
+const regenerate = async (question) => {
+  if (loading.value || !question) return
+
+  // 移除上一次该问题对应的助手回复（紧跟在最后一条同内容用户消息之后的助手消息）
+  const lastUserIdx = messages.value.map((m, i) => ({ m, i }))
+    .filter(({ m }) => m.role === 'user' && m.content === question)
+    .pop()?.i
+  if (lastUserIdx != null && lastUserIdx + 1 < messages.value.length && messages.value[lastUserIdx + 1].role === 'assistant') {
+    messages.value.splice(lastUserIdx + 1, 1)
+  }
+
+  await nextTick()
+  scrollToBottom()
+
+  loading.value = true
+  const cleanupSteps = simulateSteps()
+
+  try {
+    const res = await chatApi.query({
+      dsId: selectedDsId.value,
+      question,
+      conversationId: currentConversationId.value
+    })
+
+    if (!currentConversationId.value) {
+      currentConversationId.value = res.conversationId
+    }
+
+    finishAllSteps()
+
+    const assistantMsg = {
+      id: res.historyId || Date.now() + 1,
+      role: 'assistant',
+      content: res.explanation || (res.status === 'SUCCESS' ? '查询完成' : '查询失败'),
+      sql: res.sql,
+      data: res.data,
+      resultRows: res.data?.length || 0,
+      executionTime: res.executionTimeMs,
+      error: res.errorMessage
+    }
+    messages.value.push(assistantMsg)
+  } catch (error) {
+    finishAllSteps()
+    messages.value.push({
+      id: Date.now() + 1,
+      role: 'assistant',
+      content: '查询失败',
+      error: error.message || '查询失败，请重试'
+    })
+  } finally {
+    loading.value = false
+    cleanupSteps()
+    await nextTick()
+    scrollToBottom()
+  }
 }
 
 // --- 初始化 ---
@@ -1221,14 +1296,40 @@ onMounted(async () => {
       flex-direction: row-reverse;
       .message-body {
         align-items: flex-end;
-        .user-message-text {
-          background: linear-gradient(135deg, #6366f1, #8b5cf6);
-          color: #fff;
-          padding: 12px 18px;
-          border-radius: 18px 18px 4px 18px;
-          font-size: 14px;
-          line-height: 1.6;
-          max-width: 600px;
+        .user-message-wrapper {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+
+          .user-message-text {
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            color: #fff;
+            padding: 12px 18px;
+            border-radius: 18px 18px 4px 18px;
+            font-size: 14px;
+            line-height: 1.6;
+            max-width: 600px;
+          }
+
+          .user-message-actions {
+            margin-top: 4px;
+            opacity: 0;
+            transition: opacity 0.2s;
+
+            .copy-btn {
+              color: #9ca3af;
+              padding: 2px 6px;
+              font-size: 14px;
+
+              &:hover {
+                color: #6366f1;
+              }
+            }
+          }
+
+          &:hover .user-message-actions {
+            opacity: 1;
+          }
         }
       }
     }
@@ -1349,8 +1450,9 @@ onMounted(async () => {
   /* SQL语句模块 */
   .sql-section {
     .sql-block {
-      background: #1e1e2e;
+      background: #f8f9fc;
       border-radius: 8px;
+      border: 1px solid #e2e8f0;
       overflow: hidden;
 
       .sql-toolbar {
@@ -1358,10 +1460,12 @@ onMounted(async () => {
         justify-content: space-between;
         align-items: center;
         padding: 10px 16px;
-        background: #2d2d3d;
+        background: #eef1f6;
+        border-bottom: 1px solid #e2e8f0;
         span {
-          color: #a5b4fc;
+          color: #6366f1;
           font-size: 12px;
+          font-weight: 600;
         }
       }
 
@@ -1371,7 +1475,7 @@ onMounted(async () => {
         overflow-x: auto;
 
         code {
-          color: #cdd6f4;
+          color: #1e293b;
           font-size: 13px;
           line-height: 1.6;
           font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
@@ -1397,6 +1501,65 @@ onMounted(async () => {
         font-size: 13px;
         line-height: 1.8;
         color: #475569;
+
+        :deep(p) {
+          margin: 0 0 8px 0;
+          &:last-child { margin-bottom: 0; }
+        }
+
+        :deep(ul), :deep(ol) {
+          margin: 4px 0;
+          padding-left: 20px;
+        }
+
+        :deep(li) {
+          margin-bottom: 4px;
+        }
+
+        :deep(code) {
+          background: #f1f5f9;
+          padding: 1px 5px;
+          border-radius: 3px;
+          font-size: 12px;
+          color: #e11d48;
+          font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+        }
+
+        :deep(pre) {
+          background: #1e1e2e;
+          border-radius: 6px;
+          padding: 12px;
+          overflow-x: auto;
+          margin: 8px 0;
+
+          code {
+            background: none;
+            color: #cdd6f4;
+            padding: 0;
+          }
+        }
+
+        :deep(strong) {
+          font-weight: 600;
+          color: #374151;
+        }
+
+        :deep(table) {
+          border-collapse: collapse;
+          width: 100%;
+          margin: 8px 0;
+
+          th, td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 10px;
+            font-size: 12px;
+          }
+
+          th {
+            background: #f9fafb;
+            font-weight: 600;
+          }
+        }
       }
     }
   }

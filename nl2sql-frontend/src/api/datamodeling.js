@@ -27,5 +27,9 @@ export const datamodelingApi = {
 
   createRelation(dsId, data) {
     return request.post(`/datamodeling/${dsId}/relation`, data)
+  },
+
+  publish(dsId) {
+    return request.post(`/datamodeling/${dsId}/publish`)
   }
 }
