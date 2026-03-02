@@ -70,9 +70,10 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     @Override
     public QueryResponse query(QueryRequest request, Long userId) {
         long startTime = System.currentTimeMillis();
+        Conversation conversation = null;
 
         try {
-            Conversation conversation = getOrCreateConversation(request, userId);
+            conversation = getOrCreateConversation(request, userId);
             String schemaContext = neo4jService.buildSchemaContext(request.getDsId());
             DataSource ds = dataSourceService.getById(request.getDsId());
             String dbType = resolveDbTypeLabel(ds.getType());
@@ -123,8 +124,17 @@ public class NL2SqlServiceImpl implements NL2SqlService {
                     (int) executionTime, e.getMessage(), llmProvider);
 
             // 保存失败时的对话记录
-            Long convId = request.getConversationId();
+            Long convId = conversation != null ? conversation.getId() : request.getConversationId();
             if (convId != null) {
+                // 更新会话标题（即使失败也设置标题，避免空白记录）
+                if (conversation != null && (conversation.getTitle() == null || conversation.getTitle().isEmpty())) {
+                    String title = request.getQuestion().length() > 50
+                            ? request.getQuestion().substring(0, 50) + "..."
+                            : request.getQuestion();
+                    conversation.setTitle(title);
+                    conversationMapper.updateById(conversation);
+                }
+
                 saveChatMessage(convId, userId, "user", request.getQuestion(),
                         null, null, null, null, null, null);
                 saveChatMessage(convId, userId, "assistant", "查询失败",
@@ -132,6 +142,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             }
 
             return QueryResponse.builder()
+                    .conversationId(convId)
                     .question(request.getQuestion())
                     .status("FAILED")
                     .errorMessage(e.getMessage())

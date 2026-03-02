@@ -584,15 +584,11 @@ const createNewChat = async () => {
       return
     }
   }
-  try {
-    const conversation = await chatApi.createConversation(selectedDsId.value)
-    conversations.value.unshift(conversation)
-    currentConversationId.value = conversation.id
-    messages.value = []
-    analysisSteps.value = []
-  } catch (error) {
-    ElMessage.error(error.message || '创建对话失败')
-  }
+  // 懒创建：只清空本地状态，不调用后端创建会话
+  // 会话将在发送第一条消息时由后端自动创建
+  currentConversationId.value = null
+  messages.value = []
+  analysisSteps.value = []
 }
 
 const selectConversation = async (conversation) => {
@@ -697,7 +693,8 @@ const sendMessage = async () => {
       conversationId: currentConversationId.value
     })
 
-    if (!currentConversationId.value) {
+    // 后端可能自动创建了会话，更新本地ID
+    if (res.conversationId && !currentConversationId.value) {
       currentConversationId.value = res.conversationId
     }
 
@@ -774,7 +771,7 @@ const regenerate = async (question) => {
       conversationId: currentConversationId.value
     })
 
-    if (!currentConversationId.value) {
+    if (res.conversationId && !currentConversationId.value) {
       currentConversationId.value = res.conversationId
     }
 
@@ -791,6 +788,8 @@ const regenerate = async (question) => {
       error: res.errorMessage
     }
     messages.value.push(assistantMsg)
+
+    loadConversations()
   } catch (error) {
     finishAllSteps()
     messages.value.push({
