@@ -376,6 +376,8 @@ public class NL2SqlServiceImpl implements NL2SqlService {
                     ds.getHost(), ds.getPort(), ds.getDatabaseName());
             case "sqlserver", "mssql" -> String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=false",
                     ds.getHost(), ds.getPort(), ds.getDatabaseName());
+            case "oceanbase" -> String.format("jdbc:mysql://%s:%d/%s",  ds.getHost(), ds.getPort(), ds.getDatabaseName());
+
             default -> throw new RuntimeException("不支持的数据库类型: " + ds.getType());
         };
     }
