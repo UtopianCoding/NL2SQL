@@ -35,6 +35,7 @@
           <el-menu-item index="/settings/permission">权限配置</el-menu-item>
           <el-menu-item index="/settings/terminology">术语配置</el-menu-item>
           <el-menu-item index="/settings/sql-examples">SQL示例库</el-menu-item>
+          <el-menu-item index="/settings/ai-model">AI 模型配置</el-menu-item>
         </el-sub-menu>
       </el-menu>
 

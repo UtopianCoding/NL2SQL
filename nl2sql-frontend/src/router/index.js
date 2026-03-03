@@ -60,6 +60,12 @@ const routes = [
         name: 'SqlExamples',
         component: () => import('@/views/settings/placeholder.vue'),
         meta: { title: 'SQL示例库', requiresAuth: true }
+      },
+      {
+        path: 'settings/ai-model',
+        name: 'AiModelConfig',
+        component: () => import('@/views/settings/ai-model/index.vue'),
+        meta: { title: 'AI 模型配置', requiresAuth: true }
       }
     ]
   }

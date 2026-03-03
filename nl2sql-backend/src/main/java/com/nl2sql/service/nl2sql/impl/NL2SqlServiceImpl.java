@@ -10,9 +10,12 @@ import com.nl2sql.model.entity.ChatMessage;
 import com.nl2sql.model.entity.Conversation;
 import com.nl2sql.model.entity.DataSource;
 import com.nl2sql.model.entity.QueryHistory;
+import com.nl2sql.model.entity.AiModelConfig;
+import com.nl2sql.service.aimodel.AiModelConfigService;
 import com.nl2sql.service.datasource.DataSourceService;
 import com.nl2sql.service.graph.Neo4jService;
 import com.nl2sql.service.llm.DeepSeekProvider;
+import com.nl2sql.service.llm.DynamicLLMProvider;
 import com.nl2sql.service.llm.LLMProvider;
 import com.nl2sql.service.llm.QwenProvider;
 import com.nl2sql.service.nl2sql.NL2SqlService;
@@ -56,6 +59,9 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     @Autowired
     private QwenProvider qwenProvider;
 
+    @Autowired
+    private AiModelConfigService aiModelConfigService;
+
     @Value("${nl2sql.llm.provider}")
     private String llmProvider;
 
@@ -65,7 +71,11 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     @Value("${nl2sql.query.timeout-seconds}")
     private int queryTimeout;
 
+    @Value("${nl2sql.query.sql-retry-count:2}")
+    private int sqlRetryCount;
+
     private String promptTemplate;
+    private String fixPromptTemplate;
 
     @Override
     public QueryResponse query(QueryRequest request, Long userId) {
@@ -84,10 +94,39 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             String[] parsed = parseLlmResponse(llmResponse);
             String sql = parsed[0];
             String explanation = parsed[1];
-
+            log.info("生成SQL: {}", sql);
             validateSql(sql);
 
-            List<Map<String, Object>> data = executeSql(ds, sql);
+            // 尝试执行SQL，失败时自动重试（让AI修正SQL）
+            List<Map<String, Object>> data = null;
+            int retryAttempt = 0;
+            String lastError = null;
+
+            while (retryAttempt <= sqlRetryCount) {
+                try {
+                    data = executeSql(ds, sql);
+                    break; // 执行成功，跳出循环
+                } catch (Exception execEx) {
+                    lastError = execEx.getMessage();
+                    retryAttempt++;
+
+                    if (retryAttempt > sqlRetryCount) {
+                        // 超过最大重试次数，抛出异常
+                        throw new RuntimeException("SQL执行失败（已重试" + sqlRetryCount + "次）: " + lastError);
+                    }
+
+                    log.warn("SQL执行失败（第{}次），正在请求AI修正: {}", retryAttempt, lastError);
+
+                    // 构建修正prompt并重新请求AI
+                    String fixPrompt = buildFixPrompt(request.getQuestion(), schemaContext, sql, lastError, dbType);
+                    String fixResponse = provider.generateSql(fixPrompt);
+                    String[] fixParsed = parseLlmResponse(fixResponse);
+                    sql = fixParsed[0];
+                    explanation = fixParsed[1];
+                    log.info("AI修正后的SQL（第{}次重试）: {}", retryAttempt, sql);
+                    validateSql(sql);
+                }
+            }
 
             long executionTime = System.currentTimeMillis() - startTime;
 
@@ -99,8 +138,16 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             // 保存用户消息到chat_message
             saveChatMessage(conversation.getId(), userId, "user", request.getQuestion(),
                     null, null, null, null, null, null);
-            // 保存助手回复到chat_message（content存放explanation）
-            saveChatMessage(conversation.getId(), userId, "assistant", explanation,
+
+            // 构建explanation附加重试信息
+            String finalExplanation = explanation;
+            if (retryAttempt > 0) {
+                finalExplanation = (explanation != null ? explanation : "") +
+                        "\n\n（注：初始SQL执行出错，经过" + retryAttempt + "次AI自动修正后成功执行）";
+            }
+
+            // 保存助手回复到chat_message
+            saveChatMessage(conversation.getId(), userId, "assistant", finalExplanation,
                     sql, data, data.size(), (int) executionTime, null, history.getId());
 
             return QueryResponse.builder()
@@ -108,7 +155,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
                     .conversationId(conversation.getId())
                     .question(request.getQuestion())
                     .sql(sql)
-                    .explanation(explanation)
+                    .explanation(finalExplanation)
                     .data(data)
                     .totalRows(data.size())
                     .executionTimeMs(executionTime)
@@ -126,7 +173,6 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             // 保存失败时的对话记录
             Long convId = conversation != null ? conversation.getId() : request.getConversationId();
             if (convId != null) {
-                // 更新会话标题（即使失败也设置标题，避免空白记录）
                 if (conversation != null && (conversation.getTitle() == null || conversation.getTitle().isEmpty())) {
                     String title = request.getQuestion().length() > 50
                             ? request.getQuestion().substring(0, 50) + "..."
@@ -214,7 +260,53 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         };
     }
 
+    private String buildFixPrompt(String question, String schemaContext, String failedSql, String errorMessage, String dbType) {
+        if (fixPromptTemplate == null) {
+            try {
+                ClassPathResource resource = new ClassPathResource("prompts/sql_fix.txt");
+                fixPromptTemplate = StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                log.error("加载SQL修正prompt模板失败", e);
+                fixPromptTemplate = "之前生成的SQL执行失败，请修正。\n\n数据库结构：\n{{schema_context}}\n\n用户问题：{{user_question}}\n\n失败SQL：{{failed_sql}}\n\n错误信息：{{error_message}}";
+            }
+        }
+
+        return fixPromptTemplate
+                .replace("{{db_type}}", dbType)
+                .replace("{{schema_context}}", schemaContext)
+                .replace("{{user_question}}", question)
+                .replace("{{failed_sql}}", failedSql)
+                .replace("{{error_message}}", errorMessage);
+    }
+
     private LLMProvider getLLMProvider() {
+        // 优先从数据库获取默认模型配置
+        try {
+            AiModelConfig defaultConfig = aiModelConfigService.getDefault();
+            if (defaultConfig != null) {
+                Map<String, Object> extraParams = Map.of();
+                if (defaultConfig.getParams() != null && !defaultConfig.getParams().isEmpty()) {
+                    try {
+                        extraParams = objectMapper.readValue(defaultConfig.getParams(),
+                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    } catch (Exception e) {
+                        log.warn("解析模型参数失败: {}", e.getMessage());
+                    }
+                }
+                log.info("使用数据库默认模型: {} ({})", defaultConfig.getModelName(), defaultConfig.getBaseModel());
+                return new DynamicLLMProvider(
+                        defaultConfig.getModelName(),
+                        defaultConfig.getApiUrl(),
+                        defaultConfig.getApiKey(),
+                        defaultConfig.getBaseModel(),
+                        extraParams
+                );
+            }
+        } catch (Exception e) {
+            log.warn("获取默认模型配置失败，回退到配置文件: {}", e.getMessage());
+        }
+
+        // 回退到配置文件中的静态提供者
         return switch (llmProvider.toLowerCase()) {
             case "qwen" -> qwenProvider;
             default -> deepSeekProvider;

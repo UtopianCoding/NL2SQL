@@ -23,20 +23,10 @@
         <okhttp.version>4.12.0</okhttp.version>
         <jjwt.version>0.12.3</jjwt.version>
         <mybatis-plus.version>3.5.5</mybatis-plus.version>
-        <spring-ai.version>1.1.2</spring-ai.version>
+
     </properties>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.ai</groupId>
-                <artifactId>spring-ai-bom</artifactId>
-                <version>${spring-ai.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
+
     
     <dependencies>
         <!-- Spring Boot Starters -->
@@ -70,10 +60,7 @@
             <artifactId>spring-boot-starter-cache</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
+
         
         <!-- MySQL Driver -->
         <dependency>

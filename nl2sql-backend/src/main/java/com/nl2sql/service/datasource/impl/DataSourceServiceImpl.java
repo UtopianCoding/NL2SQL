@@ -208,7 +208,7 @@ public class DataSourceServiceImpl implements DataSourceService {
             case "sqlserver", "mssql" -> String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=false", host, port, database);
             case "gaussdb" -> String.format("jdbc:gaussdb://%s:%d/%s", host, port, database);
             case "kingbase" -> String.format("jdbc:kingbase8://%s:%d/%s", host, port, database);
-            case "oceanbase" -> String.format("jdbc:oceanbase://%s:%d/%s", host, port, database);
+            case "oceanbase" -> String.format("jdbc:mysql://%s:%d/%s", host, port, database);
             case "dm" -> String.format("jdbc:dm://%s:%d/%s", host, port, database);
             default -> throw new RuntimeException("不支持的数据库类型: " + type);
         };
