@@ -19,6 +19,7 @@ import com.nl2sql.service.llm.DynamicLLMProvider;
 import com.nl2sql.service.llm.LLMProvider;
 import com.nl2sql.service.llm.QwenProvider;
 import com.nl2sql.service.nl2sql.NL2SqlService;
+import com.nl2sql.service.nl2sql.SchemaContextService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -77,6 +78,9 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     private String promptTemplate;
     private String fixPromptTemplate;
 
+    @Autowired
+    private SchemaContextService schemaContextService;
+
     @Override
     public QueryResponse query(QueryRequest request, Long userId) {
         long startTime = System.currentTimeMillis();
@@ -84,7 +88,10 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
         try {
             conversation = getOrCreateConversation(request, userId);
-            String schemaContext = neo4jService.buildSchemaContext(request.getDsId());
+
+            // 使用向量检索构建精简 Schema
+            String schemaContext = schemaContextService.buildCompactSchemaContext(
+                    request.getQuestion(), request.getDsId());
             DataSource ds = dataSourceService.getById(request.getDsId());
             String dbType = resolveDbTypeLabel(ds.getType());
             String prompt = buildPrompt(request.getQuestion(), schemaContext, conversation, dbType);

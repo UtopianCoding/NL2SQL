@@ -39,6 +39,10 @@ public class SyncTaskServiceImpl implements SyncTaskService {
     @Autowired
     private Neo4jService neo4jService;
 
+    @Autowired
+    private SchemaVectorizationService schemaVectorizationService;
+
+
     @Override
     @Async
     public void executeSyncAsync(Long taskId, Long dsId, List<String> tableNames) {
@@ -121,6 +125,8 @@ public class SyncTaskServiceImpl implements SyncTaskService {
                                     .eq(FieldMeta::getTableId, tableMeta.getId())
                                     .orderByAsc(FieldMeta::getFieldIndex));
                     // Neo4j同步已移至数据建模页面的"发布"操作
+                    // 在表同步完成后调用
+                    schemaVectorizationService.vectorizeTable(tableMeta, fields, dsId);
                 }
 
                 processedCount++;

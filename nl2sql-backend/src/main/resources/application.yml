@@ -8,9 +8,9 @@ spring:
   # MySQL Configuration
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://**/nl2sql?useSSL=false&serverTimezone=Asia/Shanghai
-    username: **
-    password: ***
+    url: jdbc:mysql://101.34.56.11:3306/nl2sql?useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: root1234
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
@@ -37,17 +37,17 @@ spring:
 
   # Neo4j Configuration
   neo4j:
-    uri: bolt://**:7687
+    uri: bolt://101.34.56.11:7687
     authentication:
       username: neo4j
-      password: ***
+      password: eqaxf241
 
   # Redis Configuration
   data:
     redis:
-      host: **
+      host: 101.34.56.11
       port: 6379
-      password: **
+      password: eqaxf241
       timeout: 5000ms
       lettuce:
         pool:
@@ -69,17 +69,10 @@ spring:
     time-zone: Asia/Shanghai
     serialization:
       write-dates-as-timestamps: false
-  ai:
-    openai:
-      base-url: https://api.deepseek.com
-      api-key: **
-      chat:
-        options:
-          model: deepseek-chat
-          temperature: 0.1
+
 # Milvus Configuration
 milvus:
-  host: **
+  host: 101.34.56.11
   port: 19530
   database: default
   collection:
@@ -95,14 +88,14 @@ nl2sql:
   llm:
     provider: deepseek
     deepseek:
-      api-key: **
+      api-key: sk-e0700ae8f4b64f0ca5e4629326404150
       model: deepseek-chat
       base-url: https://api.deepseek.com/v1
       max-tokens: 4000
       temperature: 0.1
       timeout: 30000
     qwen:
-      api-key: ${QWEN_API_KEY:}
+      api-key: sk-33e138cd794a4849a3fd9dee5215a5ee
       model: qwen-turbo
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       max-tokens: 4000
@@ -119,12 +112,17 @@ nl2sql:
   query:
     max-result-rows: 1000
     timeout-seconds: 30
+    sql-retry-count: 2
     enable-explain: true
 
   # Vector Search Configuration
   vector:
-    topk: 5
-    similarity-threshold: 0.75
+    topk: 10
+    field-topk: 5
+    similarity-threshold: 0.7
+  schema:
+    max-tables: 50
+    max-fields-per-table: 30
 
 # JWT Configuration
 jwt:
