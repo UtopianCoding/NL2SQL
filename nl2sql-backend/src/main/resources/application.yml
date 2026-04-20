@@ -8,9 +8,9 @@ spring:
   # MySQL Configuration
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://101.34.56.11:3306/nl2sql?useSSL=false&serverTimezone=Asia/Shanghai
+    url: jdbc:mysql://***************:3306/nl2sql?useSSL=false&serverTimezone=Asia/Shanghai
     username: root
-    password: root1234
+    password: *****************
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
@@ -37,17 +37,17 @@ spring:
 
   # Neo4j Configuration
   neo4j:
-    uri: bolt://101.34.56.11:7687
+    uri: **************
     authentication:
-      username: neo4j
-      password: eqaxf241
+      username: ***********
+      password: ***********
 
   # Redis Configuration
   data:
     redis:
-      host: 101.34.56.11
+      host: *****************
       port: 6379
-      password: eqaxf241
+      password: ***************
       timeout: 5000ms
       lettuce:
         pool:
@@ -72,7 +72,7 @@ spring:
 
 # Milvus Configuration
 milvus:
-  host: 101.34.56.11
+  host: **********
   port: 19530
   database: default
   collection:
@@ -88,14 +88,14 @@ nl2sql:
   llm:
     provider: deepseek
     deepseek:
-      api-key: sk-e0700ae8f4b64f0ca5e4629326404150
+      api-key: ******************
       model: deepseek-chat
       base-url: https://api.deepseek.com/v1
       max-tokens: 4000
       temperature: 0.1
       timeout: 30000
     qwen:
-      api-key: sk-33e138cd794a4849a3fd9dee5215a5ee
+      api-key: **************
       model: qwen-turbo
       base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
       max-tokens: 4000
@@ -123,6 +123,15 @@ nl2sql:
   schema:
     max-tables: 50
     max-fields-per-table: 30
+    # 向量不可用时回退：避免大库一次性带入过多表/字段
+    fallback-max-tables: 12
+    fallback-max-fields-per-table: 12
+    # 精简模式下外键扩展的关联表数量上限
+    max-related-tables-compact: 8
+    # Schema 迭代优化：AI驱动二次检索轮数与上下文长度限制
+    refine-rounds: 2
+    max-context-chars: 12000
+    refine-max-keywords: 8
 
 # JWT Configuration
 jwt:

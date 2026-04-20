@@ -13,7 +13,6 @@ import com.nl2sql.model.entity.QueryHistory;
 import com.nl2sql.model.entity.AiModelConfig;
 import com.nl2sql.service.aimodel.AiModelConfigService;
 import com.nl2sql.service.datasource.DataSourceService;
-import com.nl2sql.service.graph.Neo4jService;
 import com.nl2sql.service.llm.DeepSeekProvider;
 import com.nl2sql.service.llm.DynamicLLMProvider;
 import com.nl2sql.service.llm.LLMProvider;
@@ -23,13 +22,7 @@ import com.nl2sql.service.nl2sql.SchemaContextService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StreamUtils;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.sql.*;
 import java.util.*;
 
 @Slf4j
@@ -38,9 +31,6 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
     @Autowired
     private DataSourceService dataSourceService;
-
-    @Autowired
-    private Neo4jService neo4jService;
 
     @Autowired
     private QueryHistoryMapper queryHistoryMapper;
@@ -66,20 +56,23 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     @Value("${nl2sql.llm.provider}")
     private String llmProvider;
 
-    @Value("${nl2sql.query.max-result-rows}")
-    private int maxResultRows;
-
-    @Value("${nl2sql.query.timeout-seconds}")
-    private int queryTimeout;
-
     @Value("${nl2sql.query.sql-retry-count:2}")
     private int sqlRetryCount;
 
-    private String promptTemplate;
-    private String fixPromptTemplate;
+    @Value("${nl2sql.schema.refine-rounds:2}")
+    private int schemaRefineRounds;
+
+    @Value("${nl2sql.schema.refine-max-keywords:8}")
+    private int schemaRefineMaxKeywords;
 
     @Autowired
     private SchemaContextService schemaContextService;
+
+    @Autowired
+    private PromptTemplateService promptTemplateService;
+
+    @Autowired
+    private SqlExecutionService sqlExecutionService;
 
     @Override
     public QueryResponse query(QueryRequest request, Long userId) {
@@ -88,21 +81,36 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
         try {
             conversation = getOrCreateConversation(request, userId);
+            long retrieveStart = System.currentTimeMillis();
 
             // 使用向量检索构建精简 Schema
-            String schemaContext = schemaContextService.buildCompactSchemaContext(
+            String baseSchemaContext = schemaContextService.buildCompactSchemaContext(
                     request.getQuestion(), request.getDsId());
+            LLMProvider provider = getLLMProvider();
+            String schemaContext = refineSchemaContext(
+                    provider,
+                    request.getQuestion(),
+                    request.getDsId(),
+                    baseSchemaContext,
+                    null,
+                    null);
+            log.info("Schema构建完成: baseChars={}, refinedChars={}, costMs={}",
+                    safeLength(baseSchemaContext), safeLength(schemaContext),
+                    System.currentTimeMillis() - retrieveStart);
+
             DataSource ds = dataSourceService.getById(request.getDsId());
             String dbType = resolveDbTypeLabel(ds.getType());
-            String prompt = buildPrompt(request.getQuestion(), schemaContext, conversation, dbType);
+            String prompt = promptTemplateService.buildText2SqlPrompt(
+                    request.getQuestion(), schemaContext, dbType);
 
-            LLMProvider provider = getLLMProvider();
+            long llmStart = System.currentTimeMillis();
             String llmResponse = provider.generateSql(prompt);
             String[] parsed = parseLlmResponse(llmResponse);
             String sql = parsed[0];
             String explanation = parsed[1];
-            log.info("生成SQL: {}", sql);
-            validateSql(sql);
+            log.info("生成SQL完成: model={}, sqlChars={}, llmCostMs={}",
+                    provider.getName(), safeLength(sql), System.currentTimeMillis() - llmStart);
+            sqlExecutionService.validateSql(sql);
 
             // 尝试执行SQL，失败时自动重试（让AI修正SQL）
             List<Map<String, Object>> data = null;
@@ -111,7 +119,10 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
             while (retryAttempt <= sqlRetryCount) {
                 try {
-                    data = executeSql(ds, sql);
+                    long executeStart = System.currentTimeMillis();
+                    data = sqlExecutionService.executeSelect(ds, sql);
+                    log.info("SQL执行成功: rows={}, executeCostMs={}", data.size(),
+                            System.currentTimeMillis() - executeStart);
                     break; // 执行成功，跳出循环
                 } catch (Exception execEx) {
                     lastError = execEx.getMessage();
@@ -124,14 +135,25 @@ public class NL2SqlServiceImpl implements NL2SqlService {
 
                     log.warn("SQL执行失败（第{}次），正在请求AI修正: {}", retryAttempt, lastError);
 
+                    schemaContext = refineSchemaContext(
+                            provider,
+                            request.getQuestion(),
+                            request.getDsId(),
+                            schemaContext,
+                            sql,
+                            lastError);
+
                     // 构建修正prompt并重新请求AI
-                    String fixPrompt = buildFixPrompt(request.getQuestion(), schemaContext, sql, lastError, dbType);
+                    long fixLlmStart = System.currentTimeMillis();
+                    String fixPrompt = promptTemplateService.buildSqlFixPrompt(
+                            request.getQuestion(), schemaContext, sql, lastError, dbType);
                     String fixResponse = provider.generateSql(fixPrompt);
                     String[] fixParsed = parseLlmResponse(fixResponse);
                     sql = fixParsed[0];
                     explanation = fixParsed[1];
-                    log.info("AI修正后的SQL（第{}次重试）: {}", retryAttempt, sql);
-                    validateSql(sql);
+                    log.info("AI修正SQL完成: retry={}, sqlChars={}, llmCostMs={}",
+                            retryAttempt, safeLength(sql), System.currentTimeMillis() - fixLlmStart);
+                    sqlExecutionService.validateSql(sql);
                 }
             }
 
@@ -237,25 +259,6 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         conversationMapper.updateById(conversation);
     }
 
-    private String buildPrompt(String question, String schemaContext, Conversation conversation, String dbType) {
-        if (promptTemplate == null) {
-            try {
-                ClassPathResource resource = new ClassPathResource("prompts/text2sql.txt");
-                promptTemplate = StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                log.error("加载prompt模板失败", e);
-                promptTemplate = "根据以下数据库结构，将用户问题转换为SQL：\n{{schema_context}}\n\n问题：{{user_question}}";
-            }
-        }
-
-        return promptTemplate
-                .replace("{{db_type}}", dbType)
-                .replace("{{schema_context}}", schemaContext)
-                .replace("{{user_question}}", question)
-                .replace("{{similar_queries}}", "")
-                .replace("{{conversation_history}}", "");
-    }
-
     private String resolveDbTypeLabel(String type) {
         if (type == null) return "MySQL";
         return switch (type.toLowerCase()) {
@@ -267,23 +270,95 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         };
     }
 
-    private String buildFixPrompt(String question, String schemaContext, String failedSql, String errorMessage, String dbType) {
-        if (fixPromptTemplate == null) {
-            try {
-                ClassPathResource resource = new ClassPathResource("prompts/sql_fix.txt");
-                fixPromptTemplate = StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                log.error("加载SQL修正prompt模板失败", e);
-                fixPromptTemplate = "之前生成的SQL执行失败，请修正。\n\n数据库结构：\n{{schema_context}}\n\n用户问题：{{user_question}}\n\n失败SQL：{{failed_sql}}\n\n错误信息：{{error_message}}";
+    private String refineSchemaContext(LLMProvider provider, String question, Long dsId,
+            String initialSchemaContext, String currentSql, String errorMessage) {
+        String schemaContext = initialSchemaContext == null ? "" : initialSchemaContext;
+
+        for (int i = 0; i < schemaRefineRounds; i++) {
+            SchemaRefineDecision decision = askSchemaRefineDecision(
+                    provider, question, schemaContext, currentSql, errorMessage);
+            if (!decision.needMoreSchema || decision.keywords == null || decision.keywords.isBlank()) {
+                break;
+            }
+
+            String expandQuery = question + " " + decision.keywords;
+            String extraSchema = schemaContextService.buildCompactSchemaContext(expandQuery, dsId);
+            String merged = mergeSchemaContexts(schemaContext, extraSchema);
+            if (merged.equals(schemaContext)) {
+                break;
+            }
+
+            log.info("Schema扩展第{}轮完成，关键词: {}", i + 1, decision.keywords);
+            schemaContext = merged;
+        }
+
+        return schemaContext;
+    }
+
+    private SchemaRefineDecision askSchemaRefineDecision(LLMProvider provider, String question,
+            String schemaContext, String currentSql, String errorMessage) {
+        String prompt = promptTemplateService.buildSchemaRefinePrompt(
+                question, schemaContext, currentSql, errorMessage);
+        String response;
+        try {
+            response = provider.generateSql(prompt);
+        } catch (Exception e) {
+            log.warn("Schema规划请求失败，跳过扩展: {}", e.getMessage());
+            return SchemaRefineDecision.noNeed();
+        }
+        return parseSchemaRefineResponse(response);
+    }
+
+    private SchemaRefineDecision parseSchemaRefineResponse(String response) {
+        if (response == null || response.isBlank()) {
+            return SchemaRefineDecision.noNeed();
+        }
+        try {
+            SchemaRefineDecisionPayload payload = objectMapper.readValue(response, SchemaRefineDecisionPayload.class);
+            boolean needMore = payload.needMoreSchema();
+            String normalizedKeywords = normalizeRefineKeywords(payload.keywords());
+            if (!needMore || normalizedKeywords.isBlank()) {
+                return SchemaRefineDecision.noNeed();
+            }
+            return new SchemaRefineDecision(true, normalizedKeywords);
+        } catch (Exception e) {
+            log.warn("解析Schema规划JSON失败，跳过扩展: {}", e.getMessage());
+            return SchemaRefineDecision.noNeed();
+        }
+    }
+
+    private String mergeSchemaContexts(String base, String extra) {
+        if (extra == null || extra.isBlank()) {
+            return base == null ? "" : base;
+        }
+        if (base == null || base.isBlank()) {
+            return truncateSchema(extra);
+        }
+
+        LinkedHashSet<String> lines = new LinkedHashSet<>();
+        for (String line : base.split("\\R")) {
+            if (!line.isBlank()) {
+                lines.add(line);
+            }
+        }
+        for (String line : extra.split("\\R")) {
+            if (!line.isBlank()) {
+                lines.add(line);
             }
         }
 
-        return fixPromptTemplate
-                .replace("{{db_type}}", dbType)
-                .replace("{{schema_context}}", schemaContext)
-                .replace("{{user_question}}", question)
-                .replace("{{failed_sql}}", failedSql)
-                .replace("{{error_message}}", errorMessage);
+        String merged = String.join("\n", lines);
+        return truncateSchema(merged);
+    }
+
+    private String truncateSchema(String schema) {
+        if (schema == null) {
+            return "";
+        }
+        if (schema.length() <= maxSchemaContextChars) {
+            return schema;
+        }
+        return schema.substring(0, maxSchemaContextChars);
     }
 
     private LLMProvider getLLMProvider() {
@@ -317,75 +392,6 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         return switch (llmProvider.toLowerCase()) {
             case "qwen" -> qwenProvider;
             default -> deepSeekProvider;
-        };
-    }
-
-    private void validateSql(String sql) {
-        String upperSql = sql.toUpperCase().trim();
-
-        if (!upperSql.startsWith("SELECT")) {
-            throw new RuntimeException("只允许执行SELECT查询");
-        }
-
-        List<String> dangerousKeywords = Arrays.asList(
-                "DROP", "DELETE", "UPDATE", "INSERT", "TRUNCATE",
-                "ALTER", "CREATE", "GRANT", "REVOKE", "EXEC", "EXECUTE"
-        );
-
-        for (String keyword : dangerousKeywords) {
-            // 使用词边界匹配，避免误判如 deleted 字段名
-            String pattern = "(?<![A-Z_])" + keyword + "(?![A-Z_])";
-            if (java.util.regex.Pattern.compile(pattern).matcher(upperSql).find()) {
-                throw new RuntimeException("SQL包含不允许的关键词: " + keyword);
-            }
-        }
-    }
-
-    private List<Map<String, Object>> executeSql(DataSource ds, String sql) {
-        String jdbcUrl = buildJdbcUrl(ds);
-        List<Map<String, Object>> results = new ArrayList<>();
-
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, ds.getUsername(), ds.getPassword());
-             Statement stmt = conn.createStatement()) {
-
-            stmt.setQueryTimeout(queryTimeout);
-            stmt.setMaxRows(maxResultRows);
-
-            try (ResultSet rs = stmt.executeQuery(sql)) {
-                ResultSetMetaData metaData = rs.getMetaData();
-                int columnCount = metaData.getColumnCount();
-
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int i = 1; i <= columnCount; i++) {
-                        String columnName = metaData.getColumnLabel(i);
-                        Object value = rs.getObject(i);
-                        row.put(columnName, value);
-                    }
-                    results.add(row);
-                }
-            }
-        } catch (SQLException e) {
-            log.error("SQL执行失败: {}", e.getMessage());
-            throw new RuntimeException("SQL执行失败: " + e.getMessage());
-        }
-
-        return results;
-    }
-
-    private String buildJdbcUrl(DataSource ds) {
-        return switch (ds.getType().toLowerCase()) {
-            case "mysql" -> String.format("jdbc:mysql://%s:%d/%s?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true",
-                    ds.getHost(), ds.getPort(), ds.getDatabaseName());
-            case "postgresql", "pg" -> String.format("jdbc:postgresql://%s:%d/%s",
-                    ds.getHost(), ds.getPort(), ds.getDatabaseName());
-            case "oracle" -> String.format("jdbc:oracle:thin:@%s:%d:%s",
-                    ds.getHost(), ds.getPort(), ds.getDatabaseName());
-            case "sqlserver", "mssql" -> String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=false",
-                    ds.getHost(), ds.getPort(), ds.getDatabaseName());
-            case "oceanbase" -> String.format("jdbc:mysql://%s:%d/%s",  ds.getHost(), ds.getPort(), ds.getDatabaseName());
-
-            default -> throw new RuntimeException("不支持的数据库类型: " + ds.getType());
         };
     }
 
@@ -453,5 +459,39 @@ public class NL2SqlServiceImpl implements NL2SqlService {
             sql = sql.substring(0, sql.length() - 3);
         }
         return new String[]{sql.trim(), explanation};
+    }
+
+    private record SchemaRefineDecision(boolean needMoreSchema, String keywords) {
+        private static SchemaRefineDecision noNeed() {
+            return new SchemaRefineDecision(false, "");
+        }
+    }
+
+    private record SchemaRefineDecisionPayload(Boolean needMoreSchema, String keywords) {
+        private boolean needMoreSchema() {
+            return Boolean.TRUE.equals(needMoreSchema);
+        }
+    }
+
+    private String normalizeRefineKeywords(String keywordsRaw) {
+        if (keywordsRaw == null || keywordsRaw.isBlank()) {
+            return "";
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String token : keywordsRaw.trim().split("\\s+")) {
+            String cleaned = token.trim();
+            if (!cleaned.isBlank()) {
+                unique.add(cleaned);
+            }
+        }
+        List<String> limited = new ArrayList<>(unique);
+        if (limited.size() > schemaRefineMaxKeywords) {
+            limited = limited.subList(0, schemaRefineMaxKeywords);
+        }
+        return String.join(" ", limited);
+    }
+
+    private int safeLength(String text) {
+        return text == null ? 0 : text.length();
     }
 }
