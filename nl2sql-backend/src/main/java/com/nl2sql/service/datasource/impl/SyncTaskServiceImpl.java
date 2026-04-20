@@ -11,6 +11,7 @@ import com.nl2sql.model.entity.SyncTask;
 import com.nl2sql.model.entity.TableMeta;
 import com.nl2sql.service.datasource.SyncTaskService;
 import com.nl2sql.service.graph.Neo4jService;
+import com.nl2sql.service.vector.SchemaVectorizationService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
