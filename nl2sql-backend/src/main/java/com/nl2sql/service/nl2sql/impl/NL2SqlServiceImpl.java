@@ -65,6 +65,9 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     @Value("${nl2sql.schema.refine-max-keywords:8}")
     private int schemaRefineMaxKeywords;
 
+    @Value("${nl2sql.schema.max-context-chars:12000}")
+    private int maxSchemaContextChars;
+
     @Autowired
     private SchemaContextService schemaContextService;
 
@@ -315,7 +318,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
         }
         try {
             SchemaRefineDecisionPayload payload = objectMapper.readValue(response, SchemaRefineDecisionPayload.class);
-            boolean needMore = payload.needMoreSchema();
+            boolean needMore = payload.shouldNeedMoreSchema();
             String normalizedKeywords = normalizeRefineKeywords(payload.keywords());
             if (!needMore || normalizedKeywords.isBlank()) {
                 return SchemaRefineDecision.noNeed();
@@ -468,7 +471,7 @@ public class NL2SqlServiceImpl implements NL2SqlService {
     }
 
     private record SchemaRefineDecisionPayload(Boolean needMoreSchema, String keywords) {
-        private boolean needMoreSchema() {
+        private boolean shouldNeedMoreSchema() {
             return Boolean.TRUE.equals(needMoreSchema);
         }
     }

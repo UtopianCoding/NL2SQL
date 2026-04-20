@@ -13,8 +13,11 @@ import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -93,6 +96,27 @@ public class Neo4jServiceImpl implements Neo4jService {
     @Override
     public String buildSchemaContext(Long dsId) {
         List<TableNode> tables = tableNodeRepository.findAllTablesByDsId(dsId);
+        return renderSchemaContext(tables, dsId);
+    }
+
+    @Override
+    public String buildSchemaContextWithTables(Collection<Long> tableIds, Long dsId) {
+        if (tableIds == null || tableIds.isEmpty()) {
+            return "";
+        }
+        Set<Long> targetIds = new LinkedHashSet<>(tableIds);
+        List<TableNode> tables = tableNodeRepository.findAllTablesByDsId(dsId).stream()
+                .filter(table -> targetIds.contains(table.getTableId()))
+                .collect(Collectors.toList());
+        return renderSchemaContext(tables, dsId);
+    }
+
+    @Override
+    public String buildCompactSchemaContext(Collection<Long> tableIds, Long dsId) {
+        return buildSchemaContextWithTables(tableIds, dsId);
+    }
+
+    private String renderSchemaContext(List<TableNode> tables, Long dsId) {
         StringBuilder sb = new StringBuilder();
 
         for (TableNode table : tables) {

@@ -140,7 +140,7 @@ public class SchemaSearchServiceImpl implements SchemaSearchService {
                     .withVectors(Collections.singletonList(vector))
                     .withVectorFieldName("vector")
                     .withTopK(topK)
-                    .withOutputFields(outputFields)
+                    .withOutFields(outputFields)
                     .build();
 
             R<SearchResults> searchResult = milvusClient.search(searchParam);
@@ -185,7 +185,7 @@ public class SchemaSearchServiceImpl implements SchemaSearchService {
                     .withVectors(Collections.singletonList(vector))
                     .withVectorFieldName("vector")
                     .withTopK(topK)
-                    .withOutputFields(outputFields)
+                    .withOutFields(outputFields)
                     .build();
 
             R<SearchResults> searchResult = milvusClient.search(searchParam);
@@ -265,7 +265,7 @@ public class SchemaSearchServiceImpl implements SchemaSearchService {
         if (whereMatcher.find()) {
             String whereClause = whereMatcher.group(1);
             java.util.regex.Pattern fieldPattern = java.util.regex.Pattern.compile(
-                "([a-zA-Z_][a-zA-Z0-9_]*)\\s*[="><]"
+                "([a-zA-Z_][a-zA-Z0-9_]*)\\s*[=><]"
             );
             java.util.regex.Matcher fieldMatcher = fieldPattern.matcher(whereClause);
             while (fieldMatcher.find()) {

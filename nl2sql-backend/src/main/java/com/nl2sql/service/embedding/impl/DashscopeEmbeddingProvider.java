@@ -121,9 +121,21 @@ public class DashscopeEmbeddingProvider implements EmbeddingProvider {
         }
 
         log.info("批量embedding生成完成，成功: {}/{}", 
-            Arrays.stream(results).filter(r -> r != null && Arrays.stream(r).anyMatch(v -> v != 0)).count(), 
+            Arrays.stream(results).filter(this::hasNonZeroValue).count(),
             texts.length);
         return results;
+    }
+
+    private boolean hasNonZeroValue(float[] vector) {
+        if (vector == null) {
+            return false;
+        }
+        for (float value : vector) {
+            if (value != 0f) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

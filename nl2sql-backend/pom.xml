@@ -167,13 +167,6 @@
             <artifactId>commons-codec</artifactId>
         </dependency>
 
-        <!-- SQL Parser -->
-        <dependency>
-            <groupId>com.github.jsqlparser</groupId>
-            <artifactId>jsqlparser</artifactId>
-            <version>4.9</version>
-        </dependency>
-        
         <!-- API Documentation -->
         <dependency>
             <groupId>org.springdoc</groupId>

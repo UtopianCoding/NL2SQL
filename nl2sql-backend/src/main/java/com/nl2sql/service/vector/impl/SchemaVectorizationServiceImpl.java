@@ -6,6 +6,7 @@ import com.nl2sql.service.embedding.EmbeddingProvider;
 import com.nl2sql.service.vector.SchemaVectorizationService;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.DataType;
+import io.milvus.grpc.MutationResult;
 import io.milvus.param.R;
 import io.milvus.param.RpcStatus;
 import io.milvus.param.collection.CreateCollectionParam;
@@ -17,12 +18,13 @@ import io.milvus.param.highlevel.collection.ListCollectionsParam;
 import io.milvus.param.index.CreateIndexParam;
 import io.milvus.response.DescCollResponseWrapper;
 import io.milvus.response.GetCollStatResponseWrapper;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
+
 import java.util.*;
 
 /**
@@ -232,8 +234,8 @@ public class SchemaVectorizationServiceImpl implements SchemaVectorizationServic
             CreateIndexParam indexParam = CreateIndexParam.newBuilder()
                     .withCollectionName(collectionName)
                     .withFieldName(fieldName)
-                    .withIndexType(io.milvus.param.index.IndexType.IVF_FLAT)
-                    .withMetricType(io.milvus.common.clientenum.MetricType.COSINE)
+                    .withIndexType(io.milvus.param.IndexType.IVF_FLAT)
+                    .withMetricType(io.milvus.param.MetricType.COSINE)
                     .withExtraParam("{\"nlist\": 128}")
                     .withSyncMode(Boolean.TRUE)
                     .withSyncWaitingInterval(500L)
