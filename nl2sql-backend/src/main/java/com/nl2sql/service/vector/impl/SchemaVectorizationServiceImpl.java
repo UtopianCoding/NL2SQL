@@ -10,6 +10,8 @@ import io.milvus.grpc.MutationResult;
 import io.milvus.param.R;
 import io.milvus.param.RpcStatus;
 import io.milvus.param.collection.CreateCollectionParam;
+import io.milvus.param.collection.DescribeCollectionParam;
+import io.milvus.param.collection.DropCollectionParam;
 import io.milvus.param.collection.FieldType;
 import io.milvus.param.collection.HasCollectionParam;
 import io.milvus.param.dml.DeleteParam;
@@ -18,6 +20,7 @@ import io.milvus.param.highlevel.collection.ListCollectionsParam;
 import io.milvus.param.index.CreateIndexParam;
 import io.milvus.response.DescCollResponseWrapper;
 import io.milvus.response.GetCollStatResponseWrapper;
+import io.milvus.grpc.DescribeCollectionResponse;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,8 +74,14 @@ public class SchemaVectorizationServiceImpl implements SchemaVectorizationServic
             );
 
             if (hasCollection.getData() != null && hasCollection.getData()) {
-                log.debug("表向量集合已存在: {}", TABLE_COLLECTION);
-                return;
+                // 检查维度是否匹配
+                if (!isDimensionMatch(TABLE_COLLECTION, dimension)) {
+                    log.warn("表向量集合维度不匹配，删除并重建: {}", TABLE_COLLECTION);
+                    dropCollection(TABLE_COLLECTION);
+                } else {
+                    log.debug("表向量集合已存在: {}", TABLE_COLLECTION);
+                    return;
+                }
             }
 
             // 创建集合
@@ -148,8 +157,14 @@ public class SchemaVectorizationServiceImpl implements SchemaVectorizationServic
             );
 
             if (hasCollection.getData() != null && hasCollection.getData()) {
-                log.debug("字段向量集合已存在: {}", FIELD_COLLECTION);
-                return;
+                // 检查维度是否匹配
+                if (!isDimensionMatch(FIELD_COLLECTION, dimension)) {
+                    log.warn("字段向量集合维度不匹配，删除并重建: {}", FIELD_COLLECTION);
+                    dropCollection(FIELD_COLLECTION);
+                } else {
+                    log.debug("字段向量集合已存在: {}", FIELD_COLLECTION);
+                    return;
+                }
             }
 
             // 创建集合
@@ -250,6 +265,66 @@ public class SchemaVectorizationServiceImpl implements SchemaVectorizationServic
             }
         } catch (Exception e) {
             log.error("创建索引失败: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 检查集合的向量维度是否与配置匹配
+     */
+    private boolean isDimensionMatch(String collectionName, int expectedDimension) {
+        try {
+            R<DescribeCollectionResponse> describeResult = milvusClient.describeCollection(
+                    DescribeCollectionParam.newBuilder()
+                            .withCollectionName(collectionName)
+                            .build()
+            );
+
+            if (describeResult.getStatus() != R.Status.Success.getCode()) {
+                log.warn("获取集合信息失败: {}", describeResult.getMessage());
+                return false;
+            }
+
+            // 使用 Wrapper 来获取字段信息
+            DescCollResponseWrapper wrapper = new DescCollResponseWrapper(describeResult.getData());
+            for (FieldType fieldType : wrapper.getFields()) {
+                if ("vector".equals(fieldType.getName())) {
+                    int actualDimension = fieldType.getDimension();
+                    if (actualDimension != expectedDimension) {
+                        log.warn("集合 {} 维度不匹配: 实际={}, 期望={}", 
+                                collectionName, actualDimension, expectedDimension);
+                        return false;
+                    }
+                    return true;
+                }
+            }
+
+            log.warn("集合 {} 中未找到 vector 字段", collectionName);
+            return false;
+
+        } catch (Exception e) {
+            log.error("检查集合维度失败: {}", e.getMessage(), e);
+            return false;
+        }
+    }
+
+    /**
+     * 删除集合
+     */
+    private void dropCollection(String collectionName) {
+        try {
+            R<RpcStatus> result = milvusClient.dropCollection(
+                    DropCollectionParam.newBuilder()
+                            .withCollectionName(collectionName)
+                            .build()
+            );
+
+            if (result.getStatus() == R.Status.Success.getCode()) {
+                log.info("集合删除成功: {}", collectionName);
+            } else {
+                log.error("集合删除失败: {}", result.getMessage());
+            }
+        } catch (Exception e) {
+            log.error("删除集合 {} 失败: {}", collectionName, e.getMessage(), e);
         }
     }
 

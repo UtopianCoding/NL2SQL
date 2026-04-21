@@ -52,9 +52,12 @@ public class DashscopeEmbeddingProvider implements EmbeddingProvider {
         }
 
         try {
+            JSONObject input = new JSONObject();
+            input.put("texts", new String[]{text});
+
             JSONObject requestBody = new JSONObject();
             requestBody.put("model", "text-embedding-v2");
-            requestBody.put("input", text);
+            requestBody.put("input", input);
 
             RequestBody body = RequestBody.create(
                     requestBody.toJSONString(),

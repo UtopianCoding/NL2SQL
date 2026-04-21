@@ -30,6 +30,9 @@ public class SqlExecutionService {
     @Value("${nl2sql.query.timeout-seconds}")
     private int queryTimeout;
 
+    private static final int MAX_CONNECTION_RETRIES = 3;
+    private static final long RETRY_DELAY_MS = 1000;
+
     public void validateSql(String sql) {
         validateSqlWithParser(sql);
 
@@ -54,32 +57,58 @@ public class SqlExecutionService {
         String jdbcUrl = buildJdbcUrl(ds);
         List<Map<String, Object>> results = new ArrayList<>();
 
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, ds.getUsername(), ds.getPassword());
-             java.sql.Statement stmt = conn.createStatement()) {
+        SQLException lastException = null;
+        
+        // 连接重试机制
+        for (int retry = 0; retry < MAX_CONNECTION_RETRIES; retry++) {
+            try (Connection conn = DriverManager.getConnection(jdbcUrl, ds.getUsername(), ds.getPassword());
+                 java.sql.Statement stmt = conn.createStatement()) {
 
-            stmt.setQueryTimeout(queryTimeout);
-            stmt.setMaxRows(maxResultRows);
+                stmt.setQueryTimeout(queryTimeout);
+                stmt.setMaxRows(maxResultRows);
 
-            try (ResultSet rs = stmt.executeQuery(sql)) {
-                ResultSetMetaData metaData = rs.getMetaData();
-                int columnCount = metaData.getColumnCount();
+                try (ResultSet rs = stmt.executeQuery(sql)) {
+                    ResultSetMetaData metaData = rs.getMetaData();
+                    int columnCount = metaData.getColumnCount();
 
-                while (rs.next()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (int i = 1; i <= columnCount; i++) {
-                        String columnName = metaData.getColumnLabel(i);
-                        Object value = rs.getObject(i);
-                        row.put(columnName, value);
+                    while (rs.next()) {
+                        Map<String, Object> row = new LinkedHashMap<>();
+                        for (int i = 1; i <= columnCount; i++) {
+                            String columnName = metaData.getColumnLabel(i);
+                            Object value = rs.getObject(i);
+                            row.put(columnName, value);
+                        }
+                        results.add(row);
                     }
-                    results.add(row);
+                }
+                
+                // 执行成功，返回结果
+                return results;
+                
+            } catch (SQLException e) {
+                lastException = e;
+                String errorMsg = e.getMessage();
+                
+                // 如果是连接数过多错误，等待后重试
+                if (errorMsg != null && errorMsg.contains("Too many connections")) {
+                    log.warn("数据库连接数已满，第{}次重试...", retry + 1);
+                    try {
+                        Thread.sleep(RETRY_DELAY_MS * (retry + 1)); // 递增延迟
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("SQL执行被中断", ie);
+                    }
+                } else {
+                    // 其他SQL错误直接抛出
+                    log.error("SQL执行失败: {}", errorMsg);
+                    throw new RuntimeException("SQL执行失败: " + errorMsg);
                 }
             }
-        } catch (SQLException e) {
-            log.error("SQL执行失败: {}", e.getMessage());
-            throw new RuntimeException("SQL执行失败: " + e.getMessage());
         }
-
-        return results;
+        
+        // 所有重试都失败
+        log.error("SQL执行失败，已重试{}次: {}", MAX_CONNECTION_RETRIES, lastException.getMessage());
+        throw new RuntimeException("SQL执行失败（已重试" + MAX_CONNECTION_RETRIES + "次）: " + lastException.getMessage());
     }
 
     private void validateSqlWithParser(String sql) {
